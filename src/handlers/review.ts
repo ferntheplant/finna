@@ -220,6 +220,8 @@ async function handleNormalCategorization(
 ): Promise<Response> {
   // If creating a new category, check if it already exists first
   let finalCategoryId = categoryId;
+  let wasNewCategoryCreated = false;
+
   if (newCategory) {
     const { name, description, parentId } = newCategory;
 
@@ -251,6 +253,7 @@ async function handleNormalCategorization(
         // Create the new category
         finalCategoryId = `cat_${Date.now()}_${Math.random().toString(36).substring(7)}`;
         await createCategory({ id: finalCategoryId, name, description, parentId });
+        wasNewCategoryCreated = true;
         logger.info({
           name,
           parentId,
@@ -310,6 +313,22 @@ async function handleNormalCategorization(
       categoryId: finalCategoryId,
     },
   });
+
+  // If a new category was created, trigger async retry of pending items
+  // Don't await this - let it run in the background
+  if (wasNewCategoryCreated) {
+    // Send an event to trigger the retry workflow asynchronously
+    inngest.send({
+      name: "category/created" as const,
+      data: {
+        categoryId: finalCategoryId,
+      },
+    } as any).catch(error => {
+      logger.error({
+        error: error instanceof Error ? error.message : String(error)
+      }, 'Failed to send category.created event');
+    });
+  }
 
   return new Response(safeJsonStringify({
     message: "Review resolved",

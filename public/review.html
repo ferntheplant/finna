@@ -190,6 +190,21 @@
       color: #1e40af;
     }
 
+    .reason-duplicate-category {
+      background: #fed7aa;
+      color: #9a3412;
+    }
+
+    .reason-amazon-split {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .reason-ambiguous {
+      background: #e9d5ff;
+      color: #6b21a8;
+    }
+
     .reason-llm-failure {
       background: #fee2e2;
       color: #991b1b;
@@ -412,6 +427,15 @@
         } else if (item.reason === 'new_category_suggestion') {
           reasonClass = 'reason-new-category';
           reasonText = 'New Category Suggested';
+        } else if (item.reason === 'duplicate_category_suggested') {
+          reasonClass = 'reason-duplicate-category';
+          reasonText = 'Duplicate Category';
+        } else if (item.reason === 'amazon_should_split') {
+          reasonClass = 'reason-amazon-split';
+          reasonText = '🛒 Amazon - Should Split';
+        } else if (item.reason === 'ambiguous') {
+          reasonClass = 'reason-ambiguous';
+          reasonText = 'Ambiguous';
         } else if (item.reason === 'llm_failure') {
           reasonClass = 'reason-llm-failure';
           reasonText = '⚠️ LLM Failed - Manual Review Required';

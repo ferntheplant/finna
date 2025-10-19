@@ -76,14 +76,35 @@ CATEGORIZATION PHILOSOPHY:
 
 2. PRIORITIZE DESCRIPTION OVER MERCHANT: A descriptive item name (like "Men's Running Shorts 3-Pack" from Amazon) contains enough information to categorize accurately, even if the merchant is generic like "Amazon" or "Sold by Amazon".
 
-3. CREATE SPECIFIC SUBCATEGORIES LIBERALLY: If you see a purchase that doesn't fit existing categories well, CREATE A NEW SUBCATEGORY! This is ESPECIALLY important for "Discretionary" spending - use CSV hints like "Restaurant and Bar" to create specific subcategories. Examples:
-   - "Running Shorts 3-Pack" → Create "Clothing & Apparel" under "Discretionary" or "Shopping"
-   - Restaurant purchase → Create "Restaurants & Cafes" or "Dining Out" under "Discretionary"
-   - "Protein Powder" → Create "Supplements" under "Health"
-   - "Dog Food" → Create "Pet Supplies" under "Shopping" or create new "Pets" category
-   - "Oil Change" → Create "Vehicle Maintenance" under "Transportation"
-   - Bar/Alcohol → Create "Bars & Nightlife" or "Alcohol" under "Discretionary"
-   - Entertainment → Create "Entertainment & Leisure" under "Discretionary"
+3. BE AGGRESSIVE WITH SUBCATEGORIES - ESPECIALLY FOR DISCRETIONARY SPENDING:
+
+   CRITICAL: If you're about to categorize something as "Discretionary", "Shopping", "Food", or any other broad parent category, STOP and CREATE A SPECIFIC SUBCATEGORY instead!
+
+   The goal is to make the Sankey diagram insightful by showing EXACTLY where money goes. Generic categories defeat this purpose.
+
+   MANDATORY SUBCATEGORIES for Discretionary/Shopping:
+   - Restaurants/dining → Create "Restaurants & Cafes" or "Dining Out"
+   - Bars/alcohol/nightlife → Create "Bars & Nightlife" or "Alcohol & Beverages"
+   - Clothing/shoes/accessories → Create "Clothing & Apparel"
+   - Electronics/gadgets → Create "Electronics & Tech"
+   - Entertainment/movies/games → Create "Entertainment & Media"
+   - Home decor/furniture → Create "Home Decor & Furniture"
+   - Books/magazines → Create "Books & Media"
+   - Hobbies/crafts → Create "Hobbies & Crafts"
+   - Personal care products → Create "Beauty & Personal Care"
+   - Gifts → Create "Gifts & Occasions"
+   - Coffee shops → Create "Coffee Shops" or "Cafes"
+   - Fast food → Create "Fast Food & Takeout"
+
+   Examples of GOOD subcategory creation:
+   - "Men's Running Shorts 3-Pack" → CREATE "Clothing & Apparel" under "Discretionary"
+   - "Dinner at Joe's Restaurant" → CREATE "Restaurants & Cafes" under "Discretionary"
+   - "Netflix Subscription" → CREATE "Entertainment & Media" under "Discretionary"
+   - "Coffee at Starbucks" → CREATE "Coffee Shops" under "Discretionary"
+   - "Protein Powder" → CREATE "Supplements" under "Health"
+   - "Dog Food" → CREATE "Pet Supplies" under "Essentials" or create new "Pets"
+   - "Oil Change" → CREATE "Vehicle Maintenance" under "Transportation"
+   - "Bar tab" → CREATE "Bars & Nightlife" under "Discretionary"
 
 4. ONLY REQUEST HUMAN REVIEW if the description is TRULY uninformative and you cannot determine what was purchased. Examples that DON'T need review:
    ✓ "Sold by Amazon.com" with description "Anker USB-C Cable 3-pack" → Clearly electronics
@@ -97,8 +118,9 @@ CATEGORIZATION PHILOSOPHY:
    - It's specific enough to be meaningful (not too broad like "Stuff")
    - It's general enough to be reusable (not "That one time I bought a thing")
    - It helps answer "Where does my money go?" in the Sankey diagram
-   - IMPORTANT: For "Discretionary" spending, ALWAYS create specific subcategories! Don't just use the parent "Discretionary" category. Create "Restaurants & Cafes", "Clothing", "Entertainment", "Bars & Nightlife", etc.
-   - Use CSV Category hints (like "Restaurant and Bar") as strong signals to create appropriate subcategories
+   - CRITICAL RULE: For "Discretionary" or "Shopping" spending, you MUST create specific subcategories! Never categorize directly to these parent categories. Create "Restaurants & Cafes", "Clothing & Apparel", "Entertainment & Media", "Bars & Nightlife", etc.
+   - Use CSV Category hints (like "Restaurant and Bar", "Merchandise", "Supermarkets") as strong signals to create appropriate subcategories
+   - When in doubt about whether to create a subcategory for discretionary spending, ALWAYS CREATE IT
 
 EXAMPLES OF GOOD CATEGORIZATION:
 Example 1: "Sold by Amazon", description "Nike Running Shoes"

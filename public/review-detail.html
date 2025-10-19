@@ -623,6 +623,14 @@
         reasonText = 'This merchant is too generic. Please clarify and select the appropriate category.';
       } else if (currentItem.reason === 'new_category_suggestion') {
         reasonText = 'AI suggested creating a new category. Review the suggestion or choose an existing category.';
+      } else if (currentItem.reason === 'duplicate_category_suggested') {
+        reasonText = 'AI suggested creating a category that already exists. The existing category is shown below.';
+      } else if (currentItem.reason === 'amazon_should_split') {
+        reasonText = '🛒 Amazon Purchase - Consider splitting this into individual items for more accurate categorization.';
+      } else if (currentItem.reason === 'ambiguous') {
+        reasonText = 'This expense is ambiguous and needs manual categorization.';
+      } else if (currentItem.reason === 'llm_failure') {
+        reasonText = '⚠️ AI categorization failed after multiple retries. Please categorize manually.';
       }
       document.getElementById('reason-text').textContent = reasonText;
 
@@ -1005,12 +1013,16 @@
       acceptBtn.disabled = true;
       acceptBtn.textContent = 'Submitting...';
 
+      // Get annotation if provided
+      const annotation = document.getElementById('annotation-field').value.trim() || null;
+
       try {
         const response = await fetch(`/api/review/${reviewId}/categorize`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            categoryId: categoryId
+            categoryId: categoryId,
+            annotation: annotation
           })
         });
 
@@ -1037,6 +1049,9 @@
       acceptBtn.disabled = true;
       acceptBtn.textContent = 'Submitting...';
 
+      // Get annotation if provided
+      const annotation = document.getElementById('annotation-field').value.trim() || null;
+
       try {
         const response = await fetch(`/api/review/${reviewId}/categorize`, {
           method: 'POST',
@@ -1046,7 +1061,8 @@
               name: newCategory.name,
               description: newCategory.description,
               parentId: newCategory.parentId
-            }
+            },
+            annotation: annotation
           })
         });
 

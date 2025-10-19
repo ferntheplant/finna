@@ -1,6 +1,7 @@
 import { processExpenses } from './processExpenses';
 import { categorizeExpense } from './categorizeExpense';
 import { retryReviewCategorization } from './retryReviewCategorization';
+import { retryPendingAfterCategoryCreation } from './retryPendingAfterCategoryCreation';
 import { completeReviewedExpense } from './completeReviewedExpense';
 import {
   trackRunCompletion,
@@ -13,6 +14,7 @@ export const functions = [
   processExpenses,
   categorizeExpense,
   retryReviewCategorization,
+  retryPendingAfterCategoryCreation,
   completeReviewedExpense,
   trackRunCompletion,
   trackRunCompletionFromReview,

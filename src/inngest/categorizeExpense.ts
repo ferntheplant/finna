@@ -9,6 +9,7 @@ import {
   getWorkflowRun,
   getSimilarCategorizedExpenses,
   getCategorization,
+  findCategoryByName,
 } from '../db-operations';
 import { categorizeExpense as callLLM } from '../llm';
 import type { ReviewQueueItem, CategorizationResponse, Category, Expense } from '../types';
@@ -144,7 +145,7 @@ export const categorizeExpense = inngest.createFunction(
         return await handleLowConfidenceCategorization(step, logger, runId, expense, llmResponse);
       }
     } else if (llmResponse.action === 'create_subcategory' && llmResponse.newCategory) {
-      return await handleNewCategoryRequest(step, logger, runId, expense, llmResponse);
+      return await handleNewCategoryRequest(step, logger, runId, expense, llmResponse, categories);
     } else {
       return await handleObfuscatedMerchant(step, logger, runId, expense, llmResponse);
     }
@@ -259,16 +260,73 @@ async function handleLowConfidenceCategorization(
   });
 }
 
-// New category suggestion - add to review queue and complete
+// New category suggestion - validate it doesn't already exist, then add to review queue
 async function handleNewCategoryRequest(
   step: any,
   logger: Logger,
   runId: string,
   expense: Expense,
-  llmResponse: CategorizationResponse
+  llmResponse: CategorizationResponse,
+  categories: Category[]
 ) {
   return await step.run('add-to-review-new-category', async () => {
-    logger.info(`→ Review queue: new category "${llmResponse.newCategory?.name}"`, {
+    const suggestedName = llmResponse.newCategory?.name;
+
+    // Check if this category already exists (case-insensitive)
+    const existingCategory = await findCategoryByName(suggestedName || '');
+
+    if (existingCategory) {
+      // LLM suggested creating a category that already exists!
+      // This is a bug - add to review queue with special reason
+      logger.warn(`→ Review queue: LLM suggested duplicate category "${suggestedName}" (already exists as ${existingCategory.id})`, {
+        runId,
+        expenseId: expense.id,
+        existingCategoryId: existingCategory.id
+      });
+
+      // Check if this is an Amazon expense
+      const isAmazon = expense.merchant.toLowerCase().includes('amazon') ||
+                      expense.description.toLowerCase().includes('amazon');
+
+      const reviewItem: ReviewQueueItem = {
+        id: `review_${expense.id}`,
+        expenseId: expense.id,
+        runId,
+        reason: isAmazon ? 'amazon_should_split' : 'duplicate_category_suggested',
+        llmSuggestion: {
+          categoryId: existingCategory.id, // Use the existing category instead
+          confidence: llmResponse.confidence || 0.8,
+          reasoning: `LLM suggested creating "${suggestedName}" but it already exists. ${isAmazon ? 'This is an Amazon purchase - consider splitting into individual items.' : 'Consider using the existing category or reviewing manually.'}`,
+        },
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+        retryCount: 0,
+        retryingAt: null,
+      };
+
+      await addToReviewQueue(reviewItem);
+      await updateRunStats(runId, 'reviewQueueCount', 1);
+
+      await inngest.send({
+        name: 'expenses/expense.needs_review' as const,
+        data: {
+          runId,
+          expenseId: expense.id,
+          reason: reviewItem.reason as any,
+        },
+      });
+
+      logger.info(`✓ Added duplicate category suggestion to review queue`, { runId, expenseId: expense.id });
+
+      return {
+        expenseId: expense.id,
+        action: 'needs_review',
+        reason: reviewItem.reason,
+      };
+    }
+
+    // Category doesn't exist - proceed with normal new category suggestion
+    logger.info(`→ Review queue: new category "${suggestedName}"`, {
       runId,
       expenseId: expense.id
     });
@@ -326,13 +384,19 @@ async function handleObfuscatedMerchant(
       expenseId: expense.id
     });
 
+    // Check if this is an Amazon expense - if so, suggest splitting
+    const isAmazon = expense.merchant.toLowerCase().includes('amazon') ||
+                    expense.description.toLowerCase().includes('amazon');
+
     const reviewItem: ReviewQueueItem = {
       id: `review_${expense.id}`,
       expenseId: expense.id,
       runId,
-      reason: 'obfuscated_merchant',
+      reason: isAmazon ? 'amazon_should_split' : 'ambiguous',
       llmSuggestion: {
-        reasoning: llmResponse.reasoning,
+        reasoning: isAmazon
+          ? `This is an Amazon purchase. Consider splitting it into individual items for more accurate categorization.`
+          : llmResponse.reasoning,
       },
       status: 'pending',
       createdAt: new Date().toISOString(),
@@ -349,7 +413,7 @@ async function handleObfuscatedMerchant(
       data: {
         runId,
         expenseId: expense.id,
-        reason: 'obfuscated_merchant' as const,
+        reason: reviewItem.reason as any,
       },
     });
 
@@ -359,7 +423,7 @@ async function handleObfuscatedMerchant(
     return {
       expenseId: expense.id,
       action: 'needs_review',
-      reason: 'obfuscated_merchant',
+      reason: reviewItem.reason,
     };
   });
 }

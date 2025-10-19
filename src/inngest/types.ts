@@ -105,6 +105,13 @@ type ExpenseProcessingCompleted = {
   };
 };
 
+type CategoryCreated = {
+  name: "category/created";
+  data: {
+    categoryId: string;
+  };
+};
+
 export const schemas = new EventSchemas().fromUnion<
   ExpenseProcessingStarted |
   ExpenseCategorize |
@@ -115,5 +122,6 @@ export const schemas = new EventSchemas().fromUnion<
   ReviewItemResolved |
   ReviewRetryRequested |
   ReviewSuggestionUpdated |
-  ExpenseProcessingCompleted
+  ExpenseProcessingCompleted |
+  CategoryCreated
 >();

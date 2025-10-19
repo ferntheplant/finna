@@ -47,7 +47,14 @@ export type ReviewQueueItem = {
   id: string;
   expenseId: string;
   runId: string;
-  reason: 'low_confidence' | 'obfuscated_merchant' | 'new_category_suggestion' | 'llm_failure';
+  reason:
+    | 'low_confidence'
+    | 'obfuscated_merchant'
+    | 'new_category_suggestion'
+    | 'duplicate_category_suggested' // LLM suggested creating a category that already exists
+    | 'amazon_should_split' // Amazon purchase that should be split into items
+    | 'ambiguous' // Generic ambiguous case
+    | 'llm_failure';
   llmSuggestion?: {
     categoryId?: string;
     confidence?: number;
