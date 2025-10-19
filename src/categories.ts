@@ -1,9 +1,4 @@
-type Category = {
-  id: string; // unique identifier
-  name: string; // short name of the category
-  description: string; // longer description of the category
-  parentId: string | null; // id of the parent category
-}
+import type { Category } from "./types";
 
 export const ROOT_CATEGORIES: Category[] = [
   {
@@ -60,4 +55,41 @@ export const ROOT_CATEGORIES: Category[] = [
     description: "Anything that does not fit into any other category; (note: this should be almost never used - see if a subcategory is more appropriate)",
     parentId: "0",
   }
-] as const
+];
+
+// Build full hierarchy path for a category (e.g., "Root > Discretionary > Dining")
+export function getCategoryPath(categoryId: string, allCategories: Category[]): string {
+  const category = allCategories.find(c => c.id === categoryId);
+  if (!category) return "";
+
+  if (category.parentId === null) {
+    return category.name;
+  }
+
+  const parentPath = getCategoryPath(category.parentId, allCategories);
+  return `${parentPath} > ${category.name}`;
+}
+
+// Get all categories formatted for LLM prompt
+export function formatCategoriesForPrompt(categories: Category[]): string {
+  const lines: string[] = [];
+
+  function addCategory(cat: Category, indent: number = 0) {
+    const prefix = "  ".repeat(indent);
+    lines.push(`${prefix}- [${cat.id}] ${cat.name}: ${cat.description}`);
+
+    // Add children
+    const children = categories.filter(c => c.parentId === cat.id);
+    for (const child of children) {
+      addCategory(child, indent + 1);
+    }
+  }
+
+  // Start with root
+  const root = categories.find(c => c.id === "0");
+  if (root) {
+    addCategory(root);
+  }
+
+  return lines.join("\n");
+}

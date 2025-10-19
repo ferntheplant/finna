@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Expense Review Queue</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      color: #333;
+      margin-bottom: 10px;
+    }
+
+    .subtitle {
+      color: #666;
+      margin-bottom: 30px;
+    }
+
+    .stats {
+      background: white;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 20px;
+    }
+
+    .stat-item {
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 32px;
+      font-weight: bold;
+      color: #2563eb;
+    }
+
+    .stat-label {
+      color: #666;
+      margin-top: 5px;
+    }
+
+    .filters {
+      background: white;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .filters label {
+      margin-right: 10px;
+      color: #666;
+    }
+
+    .filters select {
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+
+    .review-list {
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      overflow: hidden;
+    }
+
+    .review-item {
+      border-bottom: 1px solid #eee;
+      padding: 20px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .review-item:hover {
+      background: #f9fafb;
+    }
+
+    .review-item:last-child {
+      border-bottom: none;
+    }
+
+    .review-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 10px;
+    }
+
+    .merchant {
+      font-size: 18px;
+      font-weight: 600;
+      color: #111;
+    }
+
+    .amount {
+      font-size: 20px;
+      font-weight: bold;
+      color: #059669;
+    }
+
+    .amount.negative {
+      color: #dc2626;
+    }
+
+    .review-details {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+      color: #666;
+      font-size: 14px;
+    }
+
+    .detail-item {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .detail-label {
+      font-weight: 500;
+      color: #888;
+      font-size: 12px;
+      text-transform: uppercase;
+      margin-bottom: 2px;
+    }
+
+    .reason-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 500;
+      margin-top: 10px;
+    }
+
+    .reason-low-confidence {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    .reason-obfuscated {
+      background: #fce7f3;
+      color: #831843;
+    }
+
+    .reason-new-category {
+      background: #dbeafe;
+      color: #1e40af;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #666;
+    }
+
+    .empty-state svg {
+      width: 64px;
+      height: 64px;
+      margin-bottom: 20px;
+      opacity: 0.3;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #666;
+    }
+
+    .error {
+      background: #fee2e2;
+      color: #991b1b;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>Expense Review Queue</h1>
+    <p class="subtitle">Review expenses that need your attention</p>
+
+    <div id="error" class="error" style="display: none;"></div>
+
+    <div class="stats">
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-value" id="stat-pending">-</div>
+          <div class="stat-label">Pending Review</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="stat-low-confidence">-</div>
+          <div class="stat-label">Low Confidence</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="stat-obfuscated">-</div>
+          <div class="stat-label">Obfuscated</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="stat-new-category">-</div>
+          <div class="stat-label">New Category</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="filters">
+      <label for="run-filter">Filter by run:</label>
+      <select id="run-filter">
+        <option value="">All runs</option>
+      </select>
+      <button onclick="loadQueue()"
+        style="margin-left: 10px; padding: 8px 16px; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer;">Refresh</button>
+    </div>
+
+    <div class="review-list" id="review-list">
+      <div class="loading">Loading review queue...</div>
+    </div>
+  </div>
+
+  <script>
+    let currentQueue = [];
+
+    async function loadRuns() {
+      try {
+        const response = await fetch('/api/runs');
+        const runs = await response.json();
+
+        const select = document.getElementById('run-filter');
+        select.innerHTML = '<option value="">All runs</option>';
+
+        runs.forEach(run => {
+          const option = document.createElement('option');
+          option.value = run.runId;
+          option.textContent = `${run.runId} (${run.status})`;
+          select.appendChild(option);
+        });
+      } catch (error) {
+        console.error('Error loading runs:', error);
+      }
+    }
+
+    async function loadQueue() {
+      const runFilter = document.getElementById('run-filter').value;
+      const url = runFilter ? `/api/review-queue?runId=${runFilter}` : '/api/review-queue';
+
+      try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Failed to load queue');
+
+        currentQueue = await response.json();
+        renderQueue();
+        updateStats();
+
+        document.getElementById('error').style.display = 'none';
+      } catch (error) {
+        console.error('Error loading queue:', error);
+        document.getElementById('error').textContent = 'Error loading review queue: ' + error.message;
+        document.getElementById('error').style.display = 'block';
+      }
+    }
+
+    function updateStats() {
+      const pending = currentQueue.length;
+      const lowConfidence = currentQueue.filter(i => i.reason === 'low_confidence').length;
+      const obfuscated = currentQueue.filter(i => i.reason === 'obfuscated_merchant').length;
+      const newCategory = currentQueue.filter(i => i.reason === 'new_category_suggestion').length;
+
+      document.getElementById('stat-pending').textContent = pending;
+      document.getElementById('stat-low-confidence').textContent = lowConfidence;
+      document.getElementById('stat-obfuscated').textContent = obfuscated;
+      document.getElementById('stat-new-category').textContent = newCategory;
+    }
+
+    function renderQueue() {
+      const list = document.getElementById('review-list');
+
+      if (currentQueue.length === 0) {
+        list.innerHTML = `
+          <div class="empty-state">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <h2>All caught up!</h2>
+            <p>There are no expenses pending review.</p>
+          </div>
+        `;
+        return;
+      }
+
+      list.innerHTML = currentQueue.map(item => {
+        const expense = item.expense;
+        if (!expense) return '';
+
+        const date = new Date(expense.date).toLocaleDateString();
+        const amount = expense.amount;
+        const amountClass = amount < 0 ? 'negative' : '';
+
+        let reasonBadge = '';
+        let reasonClass = '';
+        let reasonText = '';
+
+        if (item.reason === 'low_confidence') {
+          reasonClass = 'reason-low-confidence';
+          reasonText = 'Low Confidence';
+        } else if (item.reason === 'obfuscated_merchant') {
+          reasonClass = 'reason-obfuscated';
+          reasonText = 'Needs Clarification';
+        } else if (item.reason === 'new_category_suggestion') {
+          reasonClass = 'reason-new-category';
+          reasonText = 'New Category Suggested';
+        }
+
+        reasonBadge = `<span class="reason-badge ${reasonClass}">${reasonText}</span>`;
+
+        return `
+          <div class="review-item" onclick="goToDetail('${item.id}')">
+            <div class="review-header">
+              <div class="merchant">${expense.merchant}</div>
+              <div class="amount ${amountClass}">$${Math.abs(amount).toFixed(2)}</div>
+            </div>
+            <div class="review-details">
+              <div class="detail-item">
+                <span class="detail-label">Date</span>
+                <span>${date}</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">Description</span>
+                <span>${expense.description}</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">Run ID</span>
+                <span>${item.runId}</span>
+              </div>
+            </div>
+            ${reasonBadge}
+          </div>
+        `;
+      }).join('');
+    }
+
+    function goToDetail(id) {
+      window.location.href = `/review/${id}`;
+    }
+
+    // Initialize
+    loadRuns();
+    loadQueue();
+
+    // Auto-refresh every 30 seconds
+    setInterval(loadQueue, 30000);
+  </script>
+</body>
+
+</html>

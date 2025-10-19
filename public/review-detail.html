@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Review Expense</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    .back-link {
+      color: #2563eb;
+      text-decoration: none;
+      margin-bottom: 20px;
+      display: inline-block;
+    }
+
+    .back-link:hover {
+      text-decoration: underline;
+    }
+
+    .card {
+      background: white;
+      border-radius: 8px;
+      padding: 30px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    h1 {
+      color: #333;
+      margin-bottom: 5px;
+    }
+
+    .subtitle {
+      color: #666;
+      margin-bottom: 30px;
+    }
+
+    .expense-details {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+
+    .detail-group {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .detail-label {
+      font-weight: 600;
+      color: #888;
+      font-size: 12px;
+      text-transform: uppercase;
+      margin-bottom: 5px;
+    }
+
+    .detail-value {
+      color: #111;
+      font-size: 16px;
+    }
+
+    .amount {
+      font-size: 24px;
+      font-weight: bold;
+      color: #059669;
+    }
+
+    .llm-suggestion {
+      background: #f0f9ff;
+      border-left: 4px solid #2563eb;
+      padding: 20px;
+      margin-bottom: 30px;
+      border-radius: 4px;
+    }
+
+    .llm-suggestion h3 {
+      color: #1e40af;
+      margin-bottom: 10px;
+      font-size: 16px;
+    }
+
+    .llm-suggestion .reasoning {
+      color: #475569;
+      line-height: 1.6;
+    }
+
+    .llm-suggestion .confidence {
+      margin-top: 10px;
+      font-size: 14px;
+      color: #64748b;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    .form-group label {
+      display: block;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 8px;
+    }
+
+    .search-input {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 16px;
+      margin-bottom: 10px;
+    }
+
+    .category-list {
+      max-height: 300px;
+      overflow-y: auto;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+
+    .category-item {
+      padding: 12px;
+      cursor: pointer;
+      border-bottom: 1px solid #eee;
+      transition: background 0.2s;
+    }
+
+    .category-item:hover {
+      background: #f9fafb;
+    }
+
+    .category-item:last-child {
+      border-bottom: none;
+    }
+
+    .category-item.selected {
+      background: #dbeafe;
+      border-left: 4px solid #2563eb;
+    }
+
+    .category-name {
+      font-weight: 600;
+      color: #111;
+    }
+
+    .category-path {
+      font-size: 12px;
+      color: #666;
+      margin-top: 2px;
+    }
+
+    .new-category-section {
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: 2px solid #eee;
+    }
+
+    .new-category-toggle {
+      cursor: pointer;
+      color: #2563eb;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .new-category-form {
+      margin-top: 15px;
+      display: none;
+    }
+
+    .new-category-form.active {
+      display: block;
+    }
+
+    .input-field {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+      margin-bottom: 10px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 30px;
+    }
+
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 4px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .btn-primary {
+      background: #2563eb;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #1d4ed8;
+    }
+
+    .btn-primary:disabled {
+      background: #94a3b8;
+      cursor: not-allowed;
+    }
+
+    .btn-secondary {
+      background: #e2e8f0;
+      color: #334155;
+    }
+
+    .btn-secondary:hover {
+      background: #cbd5e1;
+    }
+
+    .loading,
+    .error {
+      text-align: center;
+      padding: 40px;
+    }
+
+    .error {
+      color: #dc2626;
+    }
+
+    .amazon-section {
+      margin-top: 30px;
+      padding-top: 30px;
+      border-top: 2px solid #eee;
+    }
+
+    .amazon-toggle {
+      cursor: pointer;
+      color: #2563eb;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .amazon-form {
+      margin-top: 15px;
+      display: none;
+    }
+
+    .amazon-form.active {
+      display: block;
+    }
+
+    .textarea-field {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+      font-family: monospace;
+      margin-bottom: 10px;
+      min-height: 100px;
+    }
+
+    .amazon-preview {
+      margin-top: 15px;
+      padding: 15px;
+      background: #f9fafb;
+      border-radius: 4px;
+      border: 1px solid #e5e7eb;
+    }
+
+    .amazon-preview h4 {
+      margin-bottom: 10px;
+      color: #111;
+    }
+
+    .amazon-items-list {
+      margin-bottom: 15px;
+    }
+
+    .amazon-item {
+      padding: 8px;
+      margin-bottom: 5px;
+      background: white;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+
+    .amazon-item-title {
+      font-weight: 600;
+      color: #111;
+    }
+
+    .amazon-item-details {
+      color: #666;
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    .amazon-summary-list {
+      font-size: 14px;
+    }
+
+    .amazon-summary-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 8px;
+      margin-bottom: 2px;
+      background: white;
+      border-radius: 4px;
+    }
+
+    .amazon-summary-item.grand-total {
+      font-weight: 700;
+      background: #dbeafe;
+    }
+
+    .validation-warning {
+      padding: 10px;
+      background: #fef3c7;
+      border-left: 4px solid #f59e0b;
+      border-radius: 4px;
+      color: #92400e;
+      font-size: 14px;
+      margin-top: 10px;
+    }
+
+    .validation-error {
+      padding: 10px;
+      background: #fee2e2;
+      border-left: 4px solid #dc2626;
+      border-radius: 4px;
+      color: #991b1b;
+      font-size: 14px;
+      margin-top: 10px;
+    }
+
+    .raw-data-section {
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 4px;
+      padding: 15px;
+      margin-top: 20px;
+    }
+
+    .raw-data-section h3 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #666;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+    }
+
+    .raw-data-grid {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 8px 15px;
+      font-size: 13px;
+    }
+
+    .raw-data-label {
+      font-weight: 600;
+      color: #555;
+      text-align: right;
+    }
+
+    .raw-data-value {
+      color: #111;
+      word-break: break-word;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <a href="/review" class="back-link">← Back to Review Queue</a>
+
+    <div id="loading" class="loading">Loading expense details...</div>
+    <div id="error" class="error" style="display: none;"></div>
+
+    <div id="content" style="display: none;">
+      <div class="card">
+        <h1>Review Expense</h1>
+        <p class="subtitle" id="reason-text"></p>
+
+        <div class="expense-details">
+          <div class="detail-group">
+            <span class="detail-label">Merchant</span>
+            <span class="detail-value" id="merchant"></span>
+          </div>
+          <div class="detail-group">
+            <span class="detail-label">Amount</span>
+            <span class="amount" id="amount"></span>
+          </div>
+          <div class="detail-group">
+            <span class="detail-label">Date</span>
+            <span class="detail-value" id="date"></span>
+          </div>
+          <div class="detail-group">
+            <span class="detail-label">Description</span>
+            <span class="detail-value" id="description"></span>
+          </div>
+        </div>
+
+        <div id="llm-suggestion" style="display: none;" class="llm-suggestion">
+          <h3>AI Suggestion</h3>
+          <div class="reasoning" id="llm-reasoning"></div>
+          <div class="confidence" id="llm-confidence"></div>
+          <div class="confidence" id="llm-category"></div>
+        </div>
+
+        <div id="raw-data-section" class="raw-data-section" style="display: none;">
+          <h3>📋 Original CSV Data</h3>
+          <div id="raw-data-grid" class="raw-data-grid"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 style="margin-bottom: 20px;">Select Category</h2>
+
+        <div class="form-group">
+          <input type="text" id="category-search" class="search-input" placeholder="Search categories..."
+            onkeyup="filterCategories()" />
+          <div class="category-list" id="category-list"></div>
+        </div>
+
+        <div class="new-category-section">
+          <div class="new-category-toggle" onclick="toggleNewCategoryForm()">
+            + Create New Subcategory
+          </div>
+          <div class="new-category-form" id="new-category-form">
+            <input type="text" id="new-category-name" class="input-field"
+              placeholder="Category name (e.g., 'Dining Out')" />
+            <input type="text" id="new-category-description" class="input-field" placeholder="Category description" />
+            <select id="new-category-parent" class="input-field">
+              <option value="">Select parent category</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="amazon-section" id="amazon-section" style="display: none;">
+          <div class="amazon-toggle" onclick="toggleAmazonForm()">
+            🛒 Split Amazon Purchase
+          </div>
+          <div class="amazon-form" id="amazon-form">
+            <p style="margin-bottom: 10px; color: #666; font-size: 14px;">
+              Paste the JSON data from parse-amazon.js to automatically split this expense by items:
+            </p>
+            <label style="font-size: 13px; font-weight: 600; color: #333; margin-bottom: 5px; display: block;">
+              Purchase Items JSON:
+            </label>
+            <textarea id="amazon-items-json" class="textarea-field"
+              placeholder='[{"itemTitle": "Product Name", "orderedMerchant": "Seller Name", "unitPrice": "$24.99"}, ...]'
+              oninput="parseAmazonData()"></textarea>
+
+            <label style="font-size: 13px; font-weight: 600; color: #333; margin-bottom: 5px; display: block;">
+              Charge Summary JSON (optional):
+            </label>
+            <textarea id="amazon-summary-json" class="textarea-field"
+              placeholder='[{"label": "Items:", "content": "$149.99"}, {"label": "Shipping:", "content": "$5.99"}, {"label": "Tax:", "content": "$12.50"}, {"label": "Grand Total:", "content": "$168.48"}]'
+              oninput="parseAmazonData()"></textarea>
+
+            <div id="amazon-preview"></div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary" id="submit-btn" onclick="submitCategorization()" disabled>
+            Categorize Expense
+          </button>
+          <button class="btn btn-secondary" onclick="window.location.href='/review'">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentItem = null;
+    let allCategories = [];
+    let selectedCategoryId = null;
+    let amazonItems = null;
+    let amazonChargeSummary = null;
+
+    async function loadData() {
+      const reviewId = window.location.pathname.split('/').pop();
+
+      try {
+        // Load review item
+        const itemResponse = await fetch(`/api/review-queue/${reviewId}`);
+        if (!itemResponse.ok) throw new Error('Failed to load review item');
+        currentItem = await itemResponse.json();
+
+        // Load categories
+        const categoriesResponse = await fetch('/api/categories');
+        if (!categoriesResponse.ok) throw new Error('Failed to load categories');
+        allCategories = await categoriesResponse.json();
+
+        renderExpenseDetails();
+        renderCategories();
+        populateParentCategories();
+        checkIfAmazonExpense();
+
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('content').style.display = 'block';
+      } catch (error) {
+        console.error('Error loading data:', error);
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('error').textContent = 'Error: ' + error.message;
+        document.getElementById('error').style.display = 'block';
+      }
+    }
+
+    function renderExpenseDetails() {
+      const expense = currentItem.expense;
+
+      document.getElementById('merchant').textContent = expense.merchant;
+      document.getElementById('amount').textContent = `$${Math.abs(expense.amount).toFixed(2)}`;
+      document.getElementById('date').textContent = new Date(expense.date).toLocaleDateString();
+      document.getElementById('description').textContent = expense.description;
+
+      // Reason text
+      let reasonText = '';
+      if (currentItem.reason === 'low_confidence') {
+        reasonText = 'AI categorization had low confidence. Please review and select the correct category.';
+      } else if (currentItem.reason === 'obfuscated_merchant') {
+        reasonText = 'This merchant is too generic. Please clarify and select the appropriate category.';
+      } else if (currentItem.reason === 'new_category_suggestion') {
+        reasonText = 'AI suggested creating a new category. Review the suggestion or choose an existing category.';
+      }
+      document.getElementById('reason-text').textContent = reasonText;
+
+      // LLM suggestion
+      if (currentItem.llmSuggestion) {
+        const suggestion = currentItem.llmSuggestion;
+        document.getElementById('llm-suggestion').style.display = 'block';
+        document.getElementById('llm-reasoning').textContent = suggestion.reasoning || '';
+
+        if (suggestion.confidence) {
+          document.getElementById('llm-confidence').textContent =
+            `Confidence: ${(suggestion.confidence * 100).toFixed(0)}%`;
+        }
+
+        if (suggestion.categoryId) {
+          const category = allCategories.find(c => c.id === suggestion.categoryId);
+          if (category) {
+            document.getElementById('llm-category').textContent =
+              `Suggested: ${category.path}`;
+          }
+        }
+
+        if (suggestion.newCategory) {
+          document.getElementById('llm-category').textContent =
+            `Suggested new: ${suggestion.newCategory.name} - ${suggestion.newCategory.description}`;
+        }
+      }
+
+      // Raw CSV data
+      if (expense.rawData && Object.keys(expense.rawData).length > 0) {
+        const rawDataGrid = document.getElementById('raw-data-grid');
+        rawDataGrid.innerHTML = '';
+
+        // Sort keys to show important ones first
+        const priorityKeys = ['Category', 'Address', 'Reference', 'City', 'State', 'Zip', 'Country'];
+        const sortedKeys = Object.keys(expense.rawData).sort((a, b) => {
+          const aIndex = priorityKeys.findIndex(k => a.toLowerCase().includes(k.toLowerCase()));
+          const bIndex = priorityKeys.findIndex(k => b.toLowerCase().includes(k.toLowerCase()));
+
+          if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
+          if (aIndex !== -1) return -1;
+          if (bIndex !== -1) return 1;
+          return a.localeCompare(b);
+        });
+
+        sortedKeys.forEach(key => {
+          const value = expense.rawData[key];
+          if (value !== null && value !== undefined && value !== '') {
+            const label = document.createElement('div');
+            label.className = 'raw-data-label';
+            label.textContent = key + ':';
+
+            const valueDiv = document.createElement('div');
+            valueDiv.className = 'raw-data-value';
+            valueDiv.textContent = String(value);
+
+            // Highlight important fields
+            if (key.toLowerCase() === 'category') {
+              valueDiv.style.fontWeight = '700';
+              valueDiv.style.color = '#2563eb';
+            }
+
+            rawDataGrid.appendChild(label);
+            rawDataGrid.appendChild(valueDiv);
+          }
+        });
+
+        document.getElementById('raw-data-section').style.display = 'block';
+      }
+    }
+
+    function renderCategories() {
+      const list = document.getElementById('category-list');
+      list.innerHTML = allCategories
+        .filter(cat => cat.id !== '0') // Don't show root
+        .map(cat => `
+          <div class="category-item" onclick="selectCategory('${cat.id}')">
+            <div class="category-name">${cat.name}</div>
+            <div class="category-path">${cat.path}</div>
+          </div>
+        `).join('');
+    }
+
+    function filterCategories() {
+      const search = document.getElementById('category-search').value.toLowerCase();
+      const items = document.querySelectorAll('.category-item');
+
+      items.forEach(item => {
+        const text = item.textContent.toLowerCase();
+        item.style.display = text.includes(search) ? 'block' : 'none';
+      });
+    }
+
+    function selectCategory(categoryId) {
+      selectedCategoryId = categoryId;
+
+      // Update UI
+      document.querySelectorAll('.category-item').forEach(item => {
+        item.classList.remove('selected');
+      });
+      event.currentTarget.classList.add('selected');
+
+      // Enable submit button
+      document.getElementById('submit-btn').disabled = false;
+
+      // Hide new category form
+      document.getElementById('new-category-form').classList.remove('active');
+    }
+
+    function populateParentCategories() {
+      const select = document.getElementById('new-category-parent');
+      allCategories
+        .filter(cat => cat.parentId === '0') // Only top-level categories
+        .forEach(cat => {
+          const option = document.createElement('option');
+          option.value = cat.id;
+          option.textContent = cat.name;
+          select.appendChild(option);
+        });
+    }
+
+    function toggleNewCategoryForm() {
+      const form = document.getElementById('new-category-form');
+      form.classList.toggle('active');
+
+      if (form.classList.contains('active')) {
+        selectedCategoryId = null;
+        document.querySelectorAll('.category-item').forEach(item => {
+          item.classList.remove('selected');
+        });
+        document.getElementById('submit-btn').disabled = false;
+      }
+    }
+
+    function checkIfAmazonExpense() {
+      if (!currentItem || !currentItem.expense) return;
+
+      const merchant = currentItem.expense.merchant.toLowerCase();
+      const description = currentItem.expense.description.toLowerCase();
+
+      // Show Amazon section if merchant or description contains amazon
+      if (merchant.includes('amazon') || description.includes('amazon')) {
+        document.getElementById('amazon-section').style.display = 'block';
+      }
+    }
+
+    function toggleAmazonForm() {
+      const form = document.getElementById('amazon-form');
+      form.classList.toggle('active');
+
+      if (form.classList.contains('active')) {
+        // When opening Amazon form, clear category selection
+        selectedCategoryId = null;
+        document.querySelectorAll('.category-item').forEach(item => {
+          item.classList.remove('selected');
+        });
+        // Hide new category form
+        document.getElementById('new-category-form').classList.remove('active');
+      } else {
+        // When closing Amazon form, clear the data
+        amazonItems = null;
+        amazonChargeSummary = null;
+        document.getElementById('amazon-items-json').value = '';
+        document.getElementById('amazon-summary-json').value = '';
+        document.getElementById('amazon-preview').innerHTML = '';
+        document.getElementById('submit-btn').disabled = true;
+      }
+    }
+
+    function parseAmazonData() {
+      const itemsText = document.getElementById('amazon-items-json').value.trim();
+      const summaryText = document.getElementById('amazon-summary-json').value.trim();
+      const previewDiv = document.getElementById('amazon-preview');
+
+      if (!itemsText) {
+        previewDiv.innerHTML = '';
+        amazonItems = null;
+        amazonChargeSummary = null;
+        document.getElementById('submit-btn').disabled = true;
+        return;
+      }
+
+      try {
+        // Parse items JSON
+        amazonItems = JSON.parse(itemsText);
+
+        if (!Array.isArray(amazonItems) || amazonItems.length === 0) {
+          throw new Error('Items must be a non-empty array');
+        }
+
+        // Validate item structure
+        for (const item of amazonItems) {
+          if (!item.itemTitle || !item.unitPrice) {
+            throw new Error('Each item must have itemTitle and unitPrice');
+          }
+        }
+
+        // Parse summary JSON if provided
+        amazonChargeSummary = null;
+        if (summaryText) {
+          amazonChargeSummary = JSON.parse(summaryText);
+          if (!Array.isArray(amazonChargeSummary)) {
+            throw new Error('Summary must be an array');
+          }
+        }
+
+        // Calculate totals and validate
+        const itemsTotal = amazonItems.reduce((sum, item) => {
+          const price = parseFloat(item.unitPrice.replace(/[$,]/g, ''));
+          return sum + price;
+        }, 0);
+
+        let grandTotal = itemsTotal;
+        let hasGrandTotal = false;
+
+        if (amazonChargeSummary) {
+          const grandTotalItem = amazonChargeSummary.find(item =>
+            item.label && item.label.toLowerCase().includes('grand total')
+          );
+          if (grandTotalItem && grandTotalItem.content) {
+            grandTotal = parseFloat(grandTotalItem.content.replace(/[$,]/g, ''));
+            hasGrandTotal = true;
+          }
+        }
+
+        // Build preview
+        let html = '<div class="amazon-preview">';
+        html += '<h4>📦 Purchase Items (' + amazonItems.length + ')</h4>';
+        html += '<div class="amazon-items-list">';
+
+        amazonItems.forEach(item => {
+          const price = parseFloat(item.unitPrice.replace(/[$,]/g, ''));
+          html += '<div class="amazon-item">';
+          html += '<div class="amazon-item-title">' + escapeHtml(item.itemTitle) + '</div>';
+          html += '<div class="amazon-item-details">';
+          html += '$' + price.toFixed(2);
+          if (item.orderedMerchant) {
+            html += ' • ' + escapeHtml(item.orderedMerchant);
+          }
+          html += '</div>';
+          html += '</div>';
+        });
+
+        html += '</div>';
+
+        // Show summary if provided
+        if (amazonChargeSummary && amazonChargeSummary.length > 0) {
+          html += '<h4>💰 Charge Summary</h4>';
+          html += '<div class="amazon-summary-list">';
+
+          amazonChargeSummary.forEach(item => {
+            const isGrandTotal = item.label && item.label.toLowerCase().includes('grand total');
+            html += '<div class="amazon-summary-item' + (isGrandTotal ? ' grand-total' : '') + '">';
+            html += '<span>' + escapeHtml(item.label) + '</span>';
+            html += '<span>' + escapeHtml(item.content) + '</span>';
+            html += '</div>';
+          });
+
+          html += '</div>';
+        }
+
+        // Validation messages
+        const expenseAmount = currentItem.expense.amount;
+        const tolerance = 0.01;
+        const diff = Math.abs(grandTotal - expenseAmount);
+
+        if (diff > tolerance) {
+          html += '<div class="validation-error">';
+          html += '<strong>⚠️ Amount Mismatch:</strong> ';
+          html += 'Grand total ($' + grandTotal.toFixed(2) + ') does not match expense amount ($' + expenseAmount.toFixed(2) + '). ';
+          html += 'Difference: $' + diff.toFixed(2);
+          html += '</div>';
+          document.getElementById('submit-btn').disabled = true;
+        } else {
+          if (hasGrandTotal && Math.abs(grandTotal - itemsTotal) > tolerance) {
+            const shippingTax = grandTotal - itemsTotal;
+            html += '<div class="validation-warning">';
+            html += '<strong>ℹ️ Note:</strong> ';
+            html += 'Shipping/taxes ($' + shippingTax.toFixed(2) + ') will be added to the most expensive item.';
+            html += '</div>';
+          }
+          document.getElementById('submit-btn').disabled = false;
+          document.getElementById('submit-btn').textContent = 'Split Into ' + amazonItems.length + ' Items';
+        }
+
+        html += '</div>';
+        previewDiv.innerHTML = html;
+
+      } catch (error) {
+        previewDiv.innerHTML = '<div class="validation-error"><strong>Parse Error:</strong> ' + escapeHtml(error.message) + '</div>';
+        amazonItems = null;
+        amazonChargeSummary = null;
+        document.getElementById('submit-btn').disabled = true;
+      }
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    async function submitCategorization() {
+      const form = document.getElementById('new-category-form');
+      const amazonForm = document.getElementById('amazon-form');
+      const reviewId = window.location.pathname.split('/').pop();
+
+      let payload;
+
+      // Handle Amazon item split
+      if (amazonForm.classList.contains('active') && amazonItems && amazonItems.length > 0) {
+        payload = {
+          amazonItems: amazonItems,
+          amazonChargeSummary: amazonChargeSummary
+        };
+      }
+      // Handle new category creation
+      else if (form.classList.contains('active')) {
+        const name = document.getElementById('new-category-name').value.trim();
+        const description = document.getElementById('new-category-description').value.trim();
+        const parentId = document.getElementById('new-category-parent').value;
+
+        if (!name || !description || !parentId) {
+          alert('Please fill in all fields for the new category');
+          return;
+        }
+
+        payload = {
+          createNewCategory: { name, description, parentId }
+        };
+      }
+      // Handle existing category selection
+      else if (selectedCategoryId) {
+        payload = { categoryId: selectedCategoryId };
+      }
+      // Nothing selected
+      else {
+        alert('Please select a category, create a new one, or split the Amazon transaction');
+        return;
+      }
+
+      document.getElementById('submit-btn').disabled = true;
+      document.getElementById('submit-btn').textContent = 'Submitting...';
+
+      try {
+        const response = await fetch(`/api/review/${reviewId}/categorize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error || 'Failed to submit');
+        }
+
+        // Success - go back to queue
+        window.location.href = '/review';
+      } catch (error) {
+        alert('Error: ' + error.message);
+        document.getElementById('submit-btn').disabled = false;
+        document.getElementById('submit-btn').textContent = 'Categorize Expense';
+      }
+    }
+
+    // Initialize
+    loadData();
+  </script>
+</body>
+
+</html>
