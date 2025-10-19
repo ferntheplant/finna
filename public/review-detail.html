@@ -544,6 +544,19 @@
           </div>
         </div>
 
+        <div class="form-group" style="margin-top: 30px;">
+          <label style="font-size: 14px; font-weight: 600; color: #333; margin-bottom: 8px; display: block;">
+            📝 Add Annotation (Optional)
+          </label>
+          <p style="font-size: 13px; color: #666; margin-bottom: 10px;">
+            Add context notes that will help the AI categorize similar expenses in the future (e.g., "This is for my
+            home office", "Weekly grocery shopping", "Birthday gift").
+          </p>
+          <textarea id="annotation-field" class="textarea-field"
+            placeholder="Add any notes or context about this expense..."
+            style="min-height: 80px; font-family: inherit;"></textarea>
+        </div>
+
         <div class="actions">
           <button class="btn btn-primary" id="submit-btn" onclick="submitCategorization()" disabled>
             Categorize Expense
@@ -1057,12 +1070,16 @@
       const amazonForm = document.getElementById('amazon-form');
       const reviewId = window.location.pathname.split('/').pop();
 
+      // Get annotation if provided
+      const annotation = document.getElementById('annotation-field').value.trim() || null;
+
       let payload;
 
       // Handle Amazon item split
       if (amazonForm.classList.contains('active') && amazonOrderDetails && amazonOrderDetails.items && amazonOrderDetails.items.length > 0) {
         payload = {
-          amazonOrderDetails: amazonOrderDetails
+          amazonOrderDetails: amazonOrderDetails,
+          annotation: annotation
         };
       }
       // Handle new category creation
@@ -1077,12 +1094,16 @@
         }
 
         payload = {
-          createNewCategory: { name, description, parentId }
+          createNewCategory: { name, description, parentId },
+          annotation: annotation
         };
       }
       // Handle existing category selection
       else if (selectedCategoryId) {
-        payload = { categoryId: selectedCategoryId };
+        payload = {
+          categoryId: selectedCategoryId,
+          annotation: annotation
+        };
       }
       // Nothing selected
       else {

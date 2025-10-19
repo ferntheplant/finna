@@ -8,6 +8,7 @@ import {
   updateWorkflowRun,
   getWorkflowRun,
   getSimilarCategorizedExpenses,
+  getCategorization,
 } from '../db-operations';
 import { categorizeExpense as callLLM } from '../llm';
 import type { ReviewQueueItem, CategorizationResponse, Category, Expense } from '../types';
@@ -26,6 +27,39 @@ export const categorizeExpense = inngest.createFunction(
     },
     // Generous retries with exponential backoff for LLM timeouts
     retries: 5,  // Retry up to 5 times
+    // Handle LLM failure after all retries exhausted
+    onFailure: async ({ event, error, step }) => {
+      await step.run('handle-llm-failure', async () => {
+        const { runId, expenseId } = event.data.event.data;
+
+        // Add to review queue with special failure reason
+        const reviewItem: ReviewQueueItem = {
+          id: `review_${expenseId}`,
+          expenseId,
+          runId,
+          reason: 'llm_failure',
+          llmSuggestion: {
+            reasoning: `LLM failed after 5 retries: ${error.message}`,
+          },
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          retryCount: 0,
+          retryingAt: null,
+        };
+
+        await addToReviewQueue(reviewItem);
+
+        // Update stats
+        await updateRunStats(runId, 'reviewQueueCount', 1);
+        await updateRunStats(runId, 'failedCount', 1);
+
+        // Send tracking event
+        await inngest.send({
+          name: 'expenses/expense.failed' as const,
+          data: { runId, expenseId, error: error.message },
+        });
+      });
+    },
   },
   { event: 'expenses/categorize' },
   async ({ event, step, logger }) => {
@@ -72,11 +106,26 @@ export const categorizeExpense = inngest.createFunction(
       return similar;
     });
 
+    // Step 3.5: Check if expense already has a categorization with annotation
+    const existingCategorization = await step.run('check-existing-categorization', async () => {
+      const existing = await getCategorization(expenseId);
+      if (existing?.annotation) {
+        logger.debug(`Found existing annotation for expense`, { runId, expenseId, annotation: existing.annotation });
+      }
+      return existing;
+    });
+
     // Step 4: Call LLM to categorize
     // Function-level retries (5x with backoff) will handle timeouts
     const llmResponse = await step.run('llm-categorization', async () => {
       logger.debug(`Calling LLM for categorization`, { runId, expenseId });
-      const response = await callLLM(expense, categories, logger, similarExpenses);
+      const response = await callLLM(
+        expense,
+        categories,
+        logger,
+        similarExpenses,
+        existingCategorization?.annotation
+      );
       logger.debug(`LLM: ${response.action} (conf: ${response.confidence || 'N/A'})`, {
         runId,
         expenseId,
@@ -110,7 +159,7 @@ async function handleHighConfidenceCategorization(
   expense: Expense,
   llmResponse: CategorizationResponse
 ) {
-  await step.run('save-categorization', async () => {
+  return await step.run('save-categorization', async () => {
     const now = new Date().toISOString();
     await saveCategorization({
       expenseId: expense.id,
@@ -123,27 +172,39 @@ async function handleHighConfidenceCategorization(
       merchant: expense.merchant,
       createdAt: expense.date,
       categorizedAt: now,
+      categorizationSource: 'auto',
     });
 
     await updateRunStats(runId, 'categorizedCount', 1);
 
-    logger.debug(`✓ Categorized (${llmResponse.confidence})`, {
+    // Send tracking event for completion detection
+    await inngest.send({
+      name: 'expenses/expense.categorized' as const,
+      data: {
+        runId,
+        expenseId: expense.id,
+        categoryId: llmResponse.categoryId!,
+        source: 'auto' as const,
+      },
+    });
+
+    logger.info(`✓ Categorized (${llmResponse.confidence})`, {
       runId,
       expenseId: expense.id,
       categoryId: llmResponse.categoryId,
       confidence: llmResponse.confidence
     });
-  });
 
-  return {
-    expenseId: expense.id,
-    action: 'categorized',
-    categoryId: llmResponse.categoryId,
-    confidence: llmResponse.confidence,
-  };
+    return {
+      expenseId: expense.id,
+      action: 'categorized',
+      categoryId: llmResponse.categoryId,
+      confidence: llmResponse.confidence,
+    };
+  });
 }
 
-// Low confidence - add to review queue and wait for human input
+// Low confidence - add to review queue and complete
 async function handleLowConfidenceCategorization(
   step: any,
   logger: Logger,
@@ -151,7 +212,7 @@ async function handleLowConfidenceCategorization(
   expense: Expense,
   llmResponse: CategorizationResponse
 ) {
-  await step.run('add-to-review-low-confidence', async () => {
+  return await step.run('add-to-review-low-confidence', async () => {
     logger.info(`→ Review queue: low confidence (${llmResponse.confidence})`, {
       runId,
       expenseId: expense.id,
@@ -177,21 +238,28 @@ async function handleLowConfidenceCategorization(
     await addToReviewQueue(reviewItem);
     await updateRunStats(runId, 'reviewQueueCount', 1);
 
-    logger.debug(`Added to review queue`, { runId, expenseId: expense.id });
-  });
+    // Send tracking event
+    await inngest.send({
+      name: 'expenses/expense.needs_review' as const,
+      data: {
+        runId,
+        expenseId: expense.id,
+        reason: 'low_confidence' as const,
+      },
+    });
 
-  return await waitForResolutionAndSave(
-    step,
-    logger,
-    runId,
-    expense,
-    'wait-for-review',
-    `Human review resolved: ${llmResponse.reasoning}`,
-    'human_reviewed'
-  );
+    logger.info(`✓ Added to review queue`, { runId, expenseId: expense.id });
+
+    // Workflow completes here - human will resolve later
+    return {
+      expenseId: expense.id,
+      action: 'needs_review',
+      reason: 'low_confidence',
+    };
+  });
 }
 
-// New category suggestion - add to review queue for approval
+// New category suggestion - add to review queue and complete
 async function handleNewCategoryRequest(
   step: any,
   logger: Logger,
@@ -199,7 +267,7 @@ async function handleNewCategoryRequest(
   expense: Expense,
   llmResponse: CategorizationResponse
 ) {
-  await step.run('add-to-review-new-category', async () => {
+  return await step.run('add-to-review-new-category', async () => {
     logger.info(`→ Review queue: new category "${llmResponse.newCategory?.name}"`, {
       runId,
       expenseId: expense.id
@@ -223,18 +291,25 @@ async function handleNewCategoryRequest(
     await addToReviewQueue(reviewItem);
     await updateRunStats(runId, 'reviewQueueCount', 1);
 
-    logger.debug(`Added new category suggestion to review queue`, { runId, expenseId: expense.id });
-  });
+    // Send tracking event
+    await inngest.send({
+      name: 'expenses/expense.needs_review' as const,
+      data: {
+        runId,
+        expenseId: expense.id,
+        reason: 'new_category_suggestion' as const,
+      },
+    });
 
-  return await waitForResolutionAndSave(
-    step,
-    logger,
-    runId,
-    expense,
-    'wait-for-category-approval',
-    `New category approved: ${llmResponse.reasoning}`,
-    'new_category_approved'
-  );
+    logger.info(`✓ Added new category suggestion to review queue`, { runId, expenseId: expense.id });
+
+    // Workflow completes here - human will resolve later
+    return {
+      expenseId: expense.id,
+      action: 'needs_review',
+      reason: 'new_category_suggestion',
+    };
+  });
 }
 
 // Obfuscated merchant - needs human clarification
@@ -245,7 +320,7 @@ async function handleObfuscatedMerchant(
   expense: Expense,
   llmResponse: CategorizationResponse
 ) {
-  await step.run('add-to-review-human-needed', async () => {
+  return await step.run('add-to-review-human-needed', async () => {
     logger.info(`→ Review queue: ${llmResponse.reasoning}`, {
       runId,
       expenseId: expense.id
@@ -265,149 +340,42 @@ async function handleObfuscatedMerchant(
       retryingAt: null,
     };
 
-    logger.debug(`About to add review item:`, { reviewItem });
     await addToReviewQueue(reviewItem);
     await updateRunStats(runId, 'reviewQueueCount', 1);
 
-    logger.debug(`Added to review queue - human needed`, { runId, expenseId: expense.id });
-  });
-
-  return await waitForResolutionAndSave(
-    step,
-    logger,
-    runId,
-    expense,
-    'wait-for-human-input',
-    `Human clarification: ${llmResponse.reasoning}`,
-    'human_clarified'
-  );
-}
-
-// Common wait-for-resolution and save logic
-// Note: Retries are handled by a separate workflow (retryReviewCategorization)
-// which updates the suggestion in the review queue. This workflow just waits
-// for the final human decision.
-async function waitForResolutionAndSave(
-  step: any,
-  logger: Logger,
-  runId: string,
-  expense: Expense,
-  stepName: string,
-  reasoning: string,
-  actionName: string
-) {
-  logger.debug(`Waiting for human resolution`, { runId, expenseId: expense.id });
-
-  const resolution = await step.waitForEvent(stepName, {
-    event: 'review/item.resolved',
-    timeout: '7d',
-    match: 'data.expenseId',
-  });
-
-  if (resolution) {
-    await step.run(`save-${stepName}`, async () => {
-      logger.debug(`Human resolution received`, {
+    // Send tracking event
+    await inngest.send({
+      name: 'expenses/expense.needs_review' as const,
+      data: {
         runId,
         expenseId: expense.id,
-        categoryId: resolution.data.categoryId,
-        wasSplit: resolution.data.wasSplit,
-        alreadySaved: resolution.data.alreadySaved
-      });
-
-      // If the expense was split into sub-expenses, don't save a categorization for the parent
-      // The stats were already updated in the handler, and sub-expenses will be categorized separately
-      if (resolution.data.wasSplit || resolution.data.categoryId === "SPLIT") {
-        logger.info(`✓ Expense split into sub-expenses`, {
-          runId,
-          expenseId: expense.id,
-          subExpenseCount: resolution.data.subExpenseIds?.length || 0
-        });
-        return;
-      }
-
-      // If auto-resolved by high confidence retry, categorization is already saved
-      // The retry workflow already saved it and updated stats
-      if (resolution.data.alreadySaved) {
-        logger.info(`✓ Auto-resolved by high confidence retry (already saved)`, {
-          runId,
-          expenseId: expense.id,
-          categoryId: resolution.data.categoryId
-        });
-        return;
-      }
-
-      // Normal categorization case - save from human decision
-      logger.debug(`Saving categorization from human decision`, {
-        runId,
-        expenseId: expense.id,
-        categoryId: resolution.data.categoryId
-      });
-
-      const now = new Date().toISOString();
-      await saveCategorization({
-        expenseId: expense.id,
-        categoryId: resolution.data.categoryId,
-        confidence: 1.0,
-        reasoning,
-        amount: expense.amount,
-        date: expense.date,
-        description: expense.description,
-        merchant: expense.merchant,
-        createdAt: expense.date,
-        categorizedAt: now,
-      });
-
-      // Update stats: increment categorized, decrement review queue
-      const run = await getWorkflowRun(runId);
-      if (run) {
-        await updateWorkflowRun(runId, {
-          categorizedCount: run.categorizedCount + 1,
-          reviewQueueCount: run.reviewQueueCount - 1,
-        });
-      }
-
-      logger.info(`✓ Human resolution complete`, { runId, expenseId: expense.id });
+        reason: 'obfuscated_merchant' as const,
+      },
     });
 
+    logger.info(`✓ Added to review queue - human needed`, { runId, expenseId: expense.id });
+
+    // Workflow completes here - human will resolve later
     return {
       expenseId: expense.id,
-      action: resolution.data.wasSplit ? 'split' :
-              resolution.data.alreadySaved ? 'auto_resolved' :
-              actionName,
-      categoryId: resolution.data.categoryId
+      action: 'needs_review',
+      reason: 'obfuscated_merchant',
     };
-  } else {
-    logger.warn(`Resolution timeout - no human response received`, { runId, expenseId: expense.id });
-    return { expenseId: expense.id, action: 'timeout' };
-  }
+  });
 }
 
-// Helper to update run stats and check for completion
-async function updateRunStats(runId: string, field: 'categorizedCount' | 'reviewQueueCount', increment: number) {
+
+// Helper to update run stats (without completion detection - handled by trackRunCompletion)
+async function updateRunStats(
+  runId: string,
+  field: 'categorizedCount' | 'reviewQueueCount' | 'failedCount',
+  increment: number
+) {
   const run = await getWorkflowRun(runId);
   if (run) {
     const newValue = run[field] + increment;
     await updateWorkflowRun(runId, {
       [field]: newValue,
     });
-
-    // Check if all categorizations are complete
-    // (categorized + review queue should equal total expenses)
-    const categorizedCount = field === 'categorizedCount' ? newValue : run.categorizedCount;
-    const reviewQueueCount = field === 'reviewQueueCount' ? newValue : run.reviewQueueCount;
-    const processedCount = categorizedCount + reviewQueueCount;
-
-    if (processedCount === run.totalExpenses) {
-      // All categorizations are done! Send completion event
-      await inngest.send({
-        name: 'expenses/processing.completed',
-        data: {
-          runId,
-          totalExpenses: run.totalExpenses,
-          categorizedCount,
-          reviewQueueCount,
-        },
-      });
-    }
   }
 }

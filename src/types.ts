@@ -38,6 +38,8 @@ export type Categorization = {
   merchant: string;
   createdAt: string; // ISO timestamp - when the expense was created
   categorizedAt: string; // ISO timestamp - when this categorization was made
+  annotation?: string; // Optional manual annotation added during review
+  categorizationSource: 'auto' | 'manual' | 'retry_auto'; // How this was categorized
 };
 
 // Review queue item
@@ -45,7 +47,7 @@ export type ReviewQueueItem = {
   id: string;
   expenseId: string;
   runId: string;
-  reason: 'low_confidence' | 'obfuscated_merchant' | 'new_category_suggestion';
+  reason: 'low_confidence' | 'obfuscated_merchant' | 'new_category_suggestion' | 'llm_failure';
   llmSuggestion?: {
     categoryId?: string;
     confidence?: number;
@@ -93,10 +95,11 @@ export type WorkflowRun = {
   runId: string;
   filePath: string;
   csvType: 'credit_card' | 'bank_statement';
-  status: 'processing' | 'completed' | 'failed';
+  status: 'processing' | 'categorization_done' | 'completed' | 'failed';
   totalExpenses: number;
   categorizedCount: number;
   reviewQueueCount: number;
+  failedCount: number;
   startedAt: string;
   completedAt?: string;
 };

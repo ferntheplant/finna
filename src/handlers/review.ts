@@ -5,6 +5,7 @@ import {
   getExpense,
   saveCategorization,
   createCategory,
+  findCategoryByName,
   findCategoryByNameAndParent,
   createSubExpenses,
   validateSubExpenseSums,
@@ -69,7 +70,8 @@ export async function handleCategorizeReview(id: string, request: Request): Prom
       splitTransaction,
       amazonItems,
       amazonChargeSummary,
-      amazonOrderDetails
+      amazonOrderDetails,
+      annotation
     } = body;
 
     if (!categoryId && !newCategory && !splitTransaction && !amazonItems && !amazonOrderDetails) {
@@ -103,7 +105,7 @@ export async function handleCategorizeReview(id: string, request: Request): Prom
     }
 
     // Handle normal categorization (no split)
-    return await handleNormalCategorization(id, item, categoryId, newCategory);
+    return await handleNormalCategorization(id, item, categoryId, newCategory, annotation);
   } catch (error) {
     return new Response(safeJsonStringify({
       error: error instanceof Error ? error.message : "Unknown error"
@@ -213,33 +215,48 @@ async function handleNormalCategorization(
   reviewId: string,
   item: any,
   categoryId: string | undefined,
-  newCategory: any
+  newCategory: any,
+  annotation?: string | null
 ): Promise<Response> {
   // If creating a new category, check if it already exists first
   let finalCategoryId = categoryId;
   if (newCategory) {
     const { name, description, parentId } = newCategory;
 
-    // Check if a category with the same name and parent already exists (case-insensitive)
-    const existingCategory = await findCategoryByNameAndParent(name, parentId);
+    // FIRST: Check if ANY category with this exact name exists (case-insensitive), regardless of parent
+    // This catches LLM mistakes like trying to create "Home Decor & Furniture" when it already exists
+    const existingByName = await findCategoryByName(name);
 
-    if (existingCategory) {
+    if (existingByName) {
       // Use the existing category instead of creating a duplicate
-      finalCategoryId = existingCategory.id;
+      finalCategoryId = existingByName.id;
       logger.info({
         name,
-        parentId,
-        existingCategoryId: existingCategory.id
-      }, 'Using existing category instead of creating duplicate');
+        requestedParent: parentId,
+        existingCategoryId: existingByName.id,
+        existingParent: existingByName.parentId
+      }, 'Found existing category with exact name match - using it instead of creating duplicate');
     } else {
-      // Create the new category
-      finalCategoryId = `cat_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-      await createCategory({ id: finalCategoryId, name, description, parentId });
-      logger.info({
-        name,
-        parentId,
-        newCategoryId: finalCategoryId
-      }, 'Created new category');
+      // SECOND: Check if a category with the same name and parent already exists (this was the old check)
+      const existingByNameAndParent = await findCategoryByNameAndParent(name, parentId);
+
+      if (existingByNameAndParent) {
+        finalCategoryId = existingByNameAndParent.id;
+        logger.info({
+          name,
+          parentId,
+          existingCategoryId: existingByNameAndParent.id
+        }, 'Using existing category (name+parent match)');
+      } else {
+        // Create the new category
+        finalCategoryId = `cat_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+        await createCategory({ id: finalCategoryId, name, description, parentId });
+        logger.info({
+          name,
+          parentId,
+          newCategoryId: finalCategoryId
+        }, 'Created new category');
+      }
     }
   }
 
@@ -277,6 +294,8 @@ async function handleNormalCategorization(
     merchant: expense.merchant,
     createdAt: expense.date,
     categorizedAt: now,
+    categorizationSource: 'manual',
+    annotation: annotation || undefined,
   });
 
   // Resolve review item

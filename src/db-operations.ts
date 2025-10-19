@@ -54,9 +54,18 @@ export async function initializeTables() {
       description VARCHAR NOT NULL,
       merchant VARCHAR NOT NULL,
       createdAt TIMESTAMP NOT NULL,
-      categorizedAt TIMESTAMP NOT NULL
+      categorizedAt TIMESTAMP NOT NULL,
+      annotation VARCHAR,
+      categorizationSource VARCHAR DEFAULT 'auto'
     )
   `);
+
+  // Add categorizationSource column if it doesn't exist (migration)
+  try {
+    await conn.run(`ALTER TABLE categorizations ADD COLUMN categorizationSource VARCHAR DEFAULT 'auto'`);
+  } catch (e) {
+    // Column already exists, ignore error
+  }
 
   // Review queue table
   await conn.run(`
@@ -88,10 +97,18 @@ export async function initializeTables() {
       totalExpenses INTEGER NOT NULL,
       categorizedCount INTEGER NOT NULL,
       reviewQueueCount INTEGER NOT NULL,
+      failedCount INTEGER DEFAULT 0,
       startedAt TIMESTAMP NOT NULL,
       completedAt TIMESTAMP
     )
   `);
+
+  // Add failedCount column if it doesn't exist (migration)
+  try {
+    await conn.run(`ALTER TABLE workflow_runs ADD COLUMN failedCount INTEGER DEFAULT 0`);
+  } catch (e) {
+    // Column already exists, ignore error
+  }
 }
 
 // Create a table for a specific workflow run from CSV file
@@ -271,6 +288,23 @@ export async function findCategoryByNameAndParent(name: string, parentId: string
   };
 }
 
+export async function findCategoryByName(name: string): Promise<Category | null> {
+  const reader = await conn.runAndReadAll(
+    "SELECT * FROM categories WHERE LOWER(name) = LOWER(?)",
+    [name]
+  );
+  const rows = reader.getRowObjectsJS();
+  if (rows.length === 0) return null;
+
+  const row: any = rows[0];
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    parentId: row.parentId,
+  };
+}
+
 export async function createCategory(category: Category): Promise<void> {
   try {
     await conn.run(
@@ -292,8 +326,8 @@ export async function saveCategorization(categorization: Categorization): Promis
   try {
     await conn.run(
       `INSERT OR REPLACE INTO categorizations
-       (expenseId, categoryId, confidence, reasoning, suggestedNewCategoryName, suggestedNewCategoryDescription, suggestedNewCategoryParentId, amount, date, description, merchant, createdAt, categorizedAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (expenseId, categoryId, confidence, reasoning, suggestedNewCategoryName, suggestedNewCategoryDescription, suggestedNewCategoryParentId, amount, date, description, merchant, createdAt, categorizedAt, annotation, categorizationSource)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS VARCHAR))`,
       [
         categorization.expenseId,
         categorization.categoryId,
@@ -307,7 +341,9 @@ export async function saveCategorization(categorization: Categorization): Promis
         categorization.description,
         categorization.merchant,
         categorization.createdAt,
-        categorization.categorizedAt
+        categorization.categorizedAt,
+        categorization.annotation || null,
+        categorization.categorizationSource
       ]
     );
   } catch (error) {
@@ -346,7 +382,26 @@ export async function getCategorization(expenseId: string): Promise<Categorizati
     merchant: row.merchant,
     createdAt: row.createdAt,
     categorizedAt: row.categorizedAt,
+    annotation: row.annotation || undefined,
+    categorizationSource: row.categorizationSource || 'auto',
   };
+}
+
+export async function updateAnnotation(expenseId: string, annotation: string | null): Promise<void> {
+  try {
+    await conn.run(
+      "UPDATE categorizations SET annotation = ? WHERE expenseId = ?",
+      [annotation, expenseId]
+    );
+    logger.debug({ expenseId, annotation }, 'Updated categorization annotation');
+  } catch (error) {
+    logger.error({
+      expenseId,
+      error: error instanceof Error ? error.message : error,
+      stack: error instanceof Error ? error.stack : undefined
+    }, 'Failed to update annotation');
+    throw error;
+  }
 }
 
 // Review queue operations
@@ -641,6 +696,7 @@ export async function getWorkflowRun(runId: string): Promise<WorkflowRun | null>
     totalExpenses: row.totalExpenses,
     categorizedCount: row.categorizedCount,
     reviewQueueCount: row.reviewQueueCount,
+    failedCount: row.failedCount || 0,
     startedAt: row.startedAt,
     completedAt: row.completedAt,
   };
@@ -656,6 +712,7 @@ export async function getAllWorkflowRuns(): Promise<WorkflowRun[]> {
     totalExpenses: row.totalExpenses,
     categorizedCount: row.categorizedCount,
     reviewQueueCount: row.reviewQueueCount,
+    failedCount: row.failedCount || 0,
     startedAt: row.startedAt,
     completedAt: row.completedAt,
   }));
@@ -786,6 +843,7 @@ export type SimilarCategorizedExpense = {
   categoryName: string;
   similarityScore: number;
   reasoning: string;
+  annotation?: string;
 };
 
 /**
@@ -815,6 +873,7 @@ export async function getSimilarCategorizedExpenses(
         c.categoryId,
         cat.name as categoryName,
         c.reasoning,
+        c.annotation,
         -- Calculate similarity scores using multiple metrics
         (
           -- Merchant similarity (30% weight)
@@ -868,6 +927,7 @@ export async function getSimilarCategorizedExpenses(
       categoryName: row.categoryName || '',
       similarityScore: row.similarityScore || 0,
       reasoning: row.reasoning || '',
+      annotation: row.annotation || undefined,
     }));
   } catch (error) {
     logger.error({

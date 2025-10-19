@@ -1,10 +1,10 @@
 # finna
 
-Categorize expenses from CSV files using local LLMs with human-in-the-loop review.
+Automated expense categorization using local LLMs with human-in-the-loop review.
 
 ## What It Does
 
-- Reads credit card and bank statement CSVs
+- Parses CSV exports from credit cards and bank statements
 - Uses Ollama (local LLM) to categorize expenses into a flexible hierarchy
 - Flags low-confidence items for human review
 - Supports splitting transactions (e.g., Amazon orders into individual items)
@@ -16,11 +16,11 @@ Categorize expenses from CSV files using local LLMs with human-in-the-loop revie
 # Install dependencies
 bun install
 
-# Start Ollama and pull a model
+# Start Ollama
 ollama serve
 ollama pull llama3.1
 
-# Start Inngest dev server (in separate terminal)
+# Start Inngest dev server (separate terminal)
 bunx inngest-cli@latest dev
 
 # Start the app
@@ -29,182 +29,204 @@ bun run dev
 # Process a CSV
 curl -X POST http://localhost:6969/api/process-csv \
   -H "Content-Type: application/json" \
-  -d '{
-    "filePath": "/path/to/expenses.csv",
-    "csvType": "credit_card"
-  }'
+  -d '{"filePath": "/path/to/expenses.csv", "csvType": "credit_card"}'
 
-# Review flagged expenses
+# Review flagged items
 open http://localhost:6969/review
 ```
 
-## CSV Formats
+## Requirements
+
+- **Bun** (runtime)
+- **Ollama** running locally
+- **CSV files** from credit cards or bank statements
+
+### Supported CSV Formats
 
 **Credit Card:**
-```csv
+```
 Date,Description,Amount,Extended Details,Appears On Your Statement As,Address,City/State,Zip Code,Country,Reference,Category
-09/19/2025,AplPay RESTAURANT NAME,11.00,...
 ```
 
 **Bank Statement:**
-```csv
+```
 Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #
-CREDIT,08/21/2025,MERCHANT NAME,55.64,ACH_CREDIT,2000.50,,
 ```
 
-## Key Features
+## Tech Stack
 
-### Stable Expense IDs
-
-Expense IDs are generated from content hashes (Date + Description + Amount + Merchant). This means:
-- ✅ Same expense = same ID across multiple imports
-- ✅ Re-importing a CSV updates existing categorizations instead of creating duplicates
-- ✅ No duplicate entries in the categorizations table
-
-### Raw CSV Data Preservation
-
-All original CSV columns are preserved and displayed in the review UI:
-- View Category field from credit card statements (very helpful for context!)
-- See Address, Reference numbers, and other fields that help identify unclear transactions
-- LLM uses the CSV Category field as additional context for better accuracy
-
-### Transaction Splitting
-
-Split a single transaction into multiple sub-expenses:
-
-```bash
-curl -X POST http://localhost:6969/api/review/{id}/categorize \
-  -H "Content-Type: application/json" \
-  -d '{
-    "splitTransaction": [
-      { "description": "Groceries", "amount": 75.50 },
-      { "description": "Household items", "amount": 24.50 }
-    ]
-  }'
-```
-
-### Amazon Integration
-
-For Amazon expenses flagged for review, you can paste the JSON data directly in the UI:
-
-1. Run `parse-amazon.js` in browser console on Amazon order page
-2. Copy the `purchasedItems` and `chargeSummary` JSON
-3. In the review UI, click "🛒 Split Amazon Purchase"
-4. Paste the JSON data
-5. Review the preview and submit
-
-**Or via API:**
-```bash
-curl -X POST http://localhost:6969/api/review/{id}/categorize \
-  -H "Content-Type: application/json" \
-  -d '{
-    "amazonItems": [...],
-    "amazonChargeSummary": [...]
-  }'
-```
-
-The system automatically:
-- Validates amounts match the expense total
-- Adds shipping/taxes to the most expensive item
-- Creates sub-expenses that get individually categorized
+- **Bun** - HTTP server and runtime
+- **Inngest** - Durable workflows with human-in-the-loop
+- **DuckDB** - Embedded database (ACID, no migrations)
+- **Ollama** - Local LLM inference
+- **Pino** - Structured logging
 
 ## Configuration
 
-Copy `.env.example` to `.env` and adjust as needed:
+Copy `.env.example` to `.env`:
 
 ```bash
 # Database
 FINNA_DB_PATH=./expenses.duckdb  # default: :memory:
 
 # Ollama
-OLLAMA_MODEL=llama3.1            # default: llama3.1
+OLLAMA_MODEL=llama3.1            # Recommended: llama3.1, qwen2.5:7b
 OLLAMA_HOST=http://localhost:11434
 
 # Logging
 DEBUG=1  # Enable debug logs (default: 0)
 ```
 
-**Recommended Models:**
-- `llama3.1` - Good balance of speed and accuracy (default)
-- `qwen3` - Excellent at JSON formatting
-- `qwen2.5:7b` - Fast and reliable
-- ⚠️ **Avoid** reasoning models like `deepseek-r1` - they break JSON output
+## Architecture
 
-Logs are written to:
-- `logs/app.log` - Structured JSON for searching
-- stdout - Pretty-printed for terminal viewing
+```
+CSV Upload → Inngest Workflow
+  ↓
+Parse & Store in DuckDB
+  ↓
+Trigger Categorization (throttled: 2 per 15s)
+  ├─→ High confidence (≥0.7) → Save categorization
+  ├─→ Low confidence → Add to review queue
+  └─→ LLM failure → Add to review queue with special flag
+  ↓
+Human reviews flagged items
+  ↓
+Workflow completes when all categorized or queued
+```
+
+**Key Design Decisions:**
+
+- **Stable IDs**: Content-based hashing (MD5 of Date+Description+Amount+Merchant) prevents duplicates across re-imports
+- **Raw data preservation**: All original CSV columns stored and displayed in review UI
+- **Table-per-run**: Each CSV import gets isolated expense table for easy comparison
+- **Event-driven completion**: Workflows complete immediately, no blocking waits
+- **Throttling**: Max 2 LLM calls per 15 seconds protects local Ollama (configurable in `src/inngest/categorizeExpense.ts`)
+
+See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for implementation details.
+
+## Key Features
+
+### Transaction Splitting
+
+Split a single charge into multiple sub-expenses:
+
+```bash
+curl -X POST http://localhost:6969/api/review/{id}/categorize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "splitTransaction": [
+      {"description": "Item 1", "amount": 75.50},
+      {"description": "Item 2", "amount": 24.50}
+    ]
+  }'
+```
+
+### Amazon Integration
+
+For Amazon purchases, paste JSON from `parse-amazon.js` (browser console script) directly in the review UI to auto-split by item.
+
+### Annotations
+
+Add manual notes to categorized expenses that the LLM will see when categorizing similar future expenses:
+
+```bash
+PATCH /api/categorizations/{expenseId}/annotation
+{"annotation": "Work expense for client meeting"}
+```
+
+## Important Gotchas
+
+### LLM Model Selection
+
+**Use these models:**
+- `llama3.1` - Good balance (default)
+- `qwen2.5:7b` - Fast and reliable
+- `qwen3` - Excellent JSON formatting
+
+**Avoid reasoning models:**
+- ⚠️ `deepseek-r1` and similar break JSON output with thinking process
+
+### Performance Tuning
+
+Default throttling: 2 concurrent LLM calls per 15 seconds (~8/min, ~480/hour).
+
+If LLM timeouts occur, reduce concurrency in `src/inngest/categorizeExpense.ts`:
+```typescript
+throttle: {
+  limit: 1,        // Only 1 at a time
+  period: '20s',   // Space them further apart
+}
+```
+
+If your hardware is fast, increase for better throughput:
+```typescript
+throttle: {
+  limit: 5,
+  period: '10s',   // ~30 per minute
+}
+```
+
+### DuckDB BigInt Serialization
+
+DuckDB returns BigInt values. API handlers use `safeJsonStringify()` to convert to Number before JSON.stringify.
+
+### Inngest Dashboard
+
+For local dev: `bunx inngest-cli@latest dev` (dashboard at http://localhost:8288)
+
+For self-hosted Docker, see [docs/DOCKER_SETUP.md](./docs/DOCKER_SETUP.md).
 
 ## API Endpoints
 
 **Processing:**
-- `POST /api/process-csv` - Start processing a CSV file
-- `GET /api/runs` - List all workflow runs
+- `POST /api/process-csv` - Start processing
+- `GET /api/runs` - List workflow runs
 - `GET /api/expenses/:runId` - Get expenses with categorizations
 
 **Review:**
-- `GET /api/review-queue` - Get pending review items
-- `POST /api/review/:id/categorize` - Resolve review item (supports splitting)
+- `GET /api/review-queue` - Get pending items
+- `POST /api/review/:id/categorize` - Resolve item (supports splitting)
 
 **Categories:**
-- `GET /api/categories` - Get all categories
-- `POST /api/categories` - Create a new category
+- `GET /api/categories` - List all
+- `POST /api/categories` - Create new
 
 **Evaluation:**
-- `GET /api/stats/:runId` - Get categorization statistics
-- `GET /api/uncategorized/:runId` - Find uncategorized expenses
-- `GET /api/compare-runs?run1=X&run2=Y` - Compare two runs
-
-## Tech Stack
-
-- **Bun** - HTTP server
-- **Inngest** - Durable workflows with human-in-the-loop support
-- **DuckDB** - Embedded database (no migrations needed)
-- **Ollama** - Local LLM inference
-
-See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for implementation details.
-
-## Inngest Dashboard
-
-For self-hosted Docker setup, see [docs/DOCKER_SETUP.md](./docs/DOCKER_SETUP.md).
-
-For local development:
-```bash
-bunx inngest-cli@latest dev
-# Dashboard at http://localhost:8288
-```
+- `GET /api/stats/:runId` - Statistics
+- `GET /api/uncategorized/:runId` - Find uncategorized
+- `GET /api/compare-runs?run1=X&run2=Y` - Compare runs
 
 ## Troubleshooting
 
-**Ollama connection errors**:
-- Ensure Ollama is running (`ollama serve`)
-- Check `OLLAMA_HOST` in your `.env`
+**Ollama connection errors:**
+- Ensure `ollama serve` is running
+- Check `OLLAMA_HOST` in `.env`
 
-**JSON parsing errors from LLM**:
-- Switch to a recommended model: `export OLLAMA_MODEL=llama3.1`
-- Avoid reasoning models like `deepseek-r1`
-- Check `logs/app.log` for the actual LLM response
+**JSON parsing errors from LLM:**
+- Switch to recommended model: `llama3.1` or `qwen2.5:7b`
+- Check `logs/app.log` for actual LLM response
 
-**BigInt serialization errors in review queue**:
-- Fixed in latest version with `safeJsonStringify()` helper
-- Converts BigInt to Number before JSON.stringify
+**Workflows hanging:**
+- Verify Inngest dev server is running
+- Check dashboard at http://localhost:8288 for stuck steps
+- Ensure functions are registered (should show 5 functions)
 
-**Duplicate categorizations**:
-- Fixed with content-based hashing
-- Re-importing same CSV now updates existing records
-
-**Workflow hangs after categorization**:
-- Fixed with event-driven completion
-- Workflow completes immediately when all categorizations done
-- Check Inngest dashboard for stuck steps
-
-**Amount/description showing as empty in UI**:
-- Fixed by excluding original CSV columns from raw data
-- Normalized fields (date, amount, description) now work correctly
-
-**DuckDB errors**:
+**DuckDB errors:**
 - Check file permissions if using persistent storage
 - Ensure `FINNA_DB_PATH` directory exists
 
-**Inngest not processing**:
-- Verify functions registered at `http://localhost:8288`
-- Check Inngest dev server is running (`bunx inngest-cli@latest dev`)
+## Logging
+
+Logs written to:
+- `logs/app.log` - Structured JSON for searching
+- stdout - Pretty-printed for terminal
+
+Enable debug logs: `DEBUG=1 bun run dev`
+
+Search logs:
+```bash
+grep '"level":50' logs/app.log | jq  # Errors only
+grep 'run_123' logs/app.log | jq     # Specific run
+```
+
+See [docs/LOGGING.md](./docs/LOGGING.md) for details.

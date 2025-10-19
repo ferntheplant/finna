@@ -10,6 +10,7 @@ import {
   resolveReviewQueueItem,
   getWorkflowRun,
   updateWorkflowRun,
+  getCategorization,
 } from '../db-operations';
 import { categorizeExpense as callLLM } from '../llm';
 
@@ -89,11 +90,26 @@ export const retryReviewCategorization = inngest.createFunction(
       return similar;
     });
 
+    // Step 5.5: Check if expense already has a categorization with annotation
+    const existingCategorization = await step.run('check-existing-categorization', async () => {
+      const existing = await getCategorization(item.expenseId);
+      if (existing?.annotation) {
+        logger.debug(`Found existing annotation for expense`, { reviewItemId, expenseId: item.expenseId, annotation: existing.annotation });
+      }
+      return existing;
+    });
+
     // Step 6: Call LLM to re-categorize with fresh category list and similar examples
     // Function-level retries (5x with backoff) will handle timeouts
     const llmResponse = await step.run('llm-retry-categorization', async () => {
       logger.debug(`Calling LLM for retry categorization`, { reviewItemId });
-      const response = await callLLM(expense, categories, logger, similarExpenses);
+      const response = await callLLM(
+        expense,
+        categories,
+        logger,
+        similarExpenses,
+        existingCategorization?.annotation
+      );
       logger.info(`LLM retry: ${response.action} (conf: ${response.confidence || 'N/A'})`, {
         reviewItemId,
         action: response.action,
@@ -119,7 +135,7 @@ export const retryReviewCategorization = inngest.createFunction(
           confidence: llmResponse.confidence
         });
 
-        // Save the categorization
+        // Save the categorization with retry_auto source
         const now = new Date().toISOString();
         await saveCategorization({
           expenseId: expense.id,
@@ -132,6 +148,7 @@ export const retryReviewCategorization = inngest.createFunction(
           merchant: expense.merchant,
           createdAt: expense.date,
           categorizedAt: now,
+          categorizationSource: 'retry_auto',
         });
 
         // Resolve the review item
@@ -146,20 +163,18 @@ export const retryReviewCategorization = inngest.createFunction(
           });
         }
 
-        // CRITICAL: Send review/item.resolved event to unblock the waiting categorizeExpense workflow
-        // The original workflow is stuck at step.waitForEvent() and needs this event to complete
-        // Set alreadySaved=true so the workflow knows not to save again
+        // Send tracking event for completion detection
         await inngest.send({
-          name: 'review/item.resolved',
+          name: 'expenses/expense.categorized' as const,
           data: {
-            reviewItemId,
+            runId: item.runId,
             expenseId: expense.id,
             categoryId: llmResponse.categoryId!,
-            alreadySaved: true,  // Signal that categorization is already saved
+            source: 'retry_auto' as const,
           },
         });
 
-        logger.info(`✓ Auto-resolved high confidence retry and sent completion event`, {
+        logger.info(`✓ Auto-resolved high confidence retry`, {
           reviewItemId,
           expenseId: expense.id,
           categoryId: llmResponse.categoryId

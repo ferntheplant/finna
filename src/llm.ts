@@ -25,7 +25,8 @@ export async function categorizeExpense(
   expense: Expense,
   categories: Category[],
   logger: Logger = defaultLogger,
-  similarExpenses: SimilarCategorizedExpense[] = []
+  similarExpenses: SimilarCategorizedExpense[] = [],
+  currentExpenseAnnotation?: string
 ): Promise<CategorizationResponse> {
 
   const categoriesText = formatCategoriesForPrompt(categories);
@@ -42,21 +43,22 @@ You have already categorized similar expenses in the past. Use these as referenc
 ${similarExpenses.map((similar, idx) => `${idx + 1}. Merchant: "${similar.merchant}" | Description: "${similar.description}" | Amount: $${similar.amount.toFixed(2)}
    → Categorized as: ${similar.categoryName} (${similar.categoryId})
    → Reasoning: ${similar.reasoning}
-   → Similarity: ${(similar.similarityScore * 100).toFixed(0)}%`).join('\n\n')}
+   → Similarity: ${(similar.similarityScore * 100).toFixed(0)}%${similar.annotation ? `\n   → ANNOTATION: ${similar.annotation}` : ''}`).join('\n\n')}
 
 CRITICAL RULES FOR USING SIMILAR EXPENSES:
 1. If you see a similar expense was categorized to a SPECIFIC subcategory (like "Restaurants & Cafes"), use THAT EXACT CATEGORY ID, not its parent.
 2. ALWAYS prefer the most specific category available. Never suggest a parent category when a more specific child exists.
 3. These examples show you the EXACT category to reuse - use the categoryId shown, don't try to generalize to a parent.
-4. If the current expense is truly different, don't force it - but if it's similar, use the EXACT SAME CATEGORY ID shown above.`;
+4. If the current expense is truly different, don't force it - but if it's similar, use the EXACT SAME CATEGORY ID shown above.
+5. Pay special attention to ANNOTATION fields - they contain important manual context added by the user during review.`;
   }
 
   const prompt = `You are an expense categorization assistant helping to build a SANKEY DIAGRAM that visualizes spending patterns. Your categorization choices directly impact how useful and insightful this visualization will be.
 
 THE END GOAL - SANKEY DIAGRAM:
 A Sankey diagram shows money flowing from Root → Category → Subcategory → Individual Expenses. The goal is to create meaningful, specific subcategories that reveal spending patterns. For example:
-- "Food" → "Groceries", "Restaurants", "Coffee Shops"
-- "Shopping" → "Clothing", "Electronics", "Home Goods"
+- "Essentials" → "Groceries", "Household Items", "Personal Care"
+- "Discretionary" → "Clothing", "Electronics", "Eating Out"
 - "Health" → "Gym Membership", "Medical Appointments", "Supplements"
 
 CURRENT CATEGORY HIERARCHY:
@@ -67,29 +69,36 @@ EXPENSE TO CATEGORIZE:
 - Date: ${expense.date}
 - Merchant: ${expense.merchant}
 - Description: ${expense.description}
-- Amount: $${expense.amount.toFixed(2)}${csvCategory ? `\n- CSV Category: ${csvCategory} (context from credit card company)` : ''}
+- Amount: $${expense.amount.toFixed(2)}${csvCategory ? `\n- CSV Category: ${csvCategory} (context from credit card company)` : ''}${currentExpenseAnnotation ? `\n- ANNOTATION: ${currentExpenseAnnotation} (important manual context from previous review)` : ''}
 
 CATEGORIZATION PHILOSOPHY:
 1. ALWAYS USE THE MOST SPECIFIC CATEGORY: When categorizing, ALWAYS choose the most specific subcategory available. NEVER suggest a parent category when a more specific child category exists. For example, if "Restaurants & Cafes" exists under "Discretionary", use "Restaurants & Cafes", NOT "Discretionary".
 
 2. PRIORITIZE DESCRIPTION OVER MERCHANT: A descriptive item name (like "Men's Running Shorts 3-Pack" from Amazon) contains enough information to categorize accurately, even if the merchant is generic like "Amazon" or "Sold by Amazon".
 
-3. CREATE SPECIFIC SUBCATEGORIES LIBERALLY: If you see a purchase that doesn't fit existing categories well, CREATE A NEW SUBCATEGORY! Examples:
-   - "Running Shorts 3-Pack" → Create "Clothing" under "Shopping"
+3. CREATE SPECIFIC SUBCATEGORIES LIBERALLY: If you see a purchase that doesn't fit existing categories well, CREATE A NEW SUBCATEGORY! This is ESPECIALLY important for "Discretionary" spending - use CSV hints like "Restaurant and Bar" to create specific subcategories. Examples:
+   - "Running Shorts 3-Pack" → Create "Clothing & Apparel" under "Discretionary" or "Shopping"
+   - Restaurant purchase → Create "Restaurants & Cafes" or "Dining Out" under "Discretionary"
    - "Protein Powder" → Create "Supplements" under "Health"
    - "Dog Food" → Create "Pet Supplies" under "Shopping" or create new "Pets" category
    - "Oil Change" → Create "Vehicle Maintenance" under "Transportation"
+   - Bar/Alcohol → Create "Bars & Nightlife" or "Alcohol" under "Discretionary"
+   - Entertainment → Create "Entertainment & Leisure" under "Discretionary"
 
 4. ONLY REQUEST HUMAN REVIEW if the description is TRULY uninformative and you cannot determine what was purchased. Examples that DON'T need review:
    ✓ "Sold by Amazon.com" with description "Anker USB-C Cable 3-pack" → Clearly electronics
    ✓ "Venmo Payment" with description "Dinner split with Sarah" → Clearly restaurants/food
    ✓ Generic merchant but specific description → USE THE DESCRIPTION
 
-5. WHEN TO CREATE NEW CATEGORIES:
+5. WHEN TO CREATE NEW CATEGORIES
+   - FIRST, CAREFULLY REVIEW THE ENTIRE CATEGORY LIST ABOVE! Don't create a new category if a similar one already exists!
+   - Check for variations: "Clothing & Apparel" vs "Clothing", "Home Decor & Furniture" vs "Furniture", "Restaurants & Cafes" vs "Dining Out"
    - The purchase represents a distinct spending pattern worth tracking
    - It's specific enough to be meaningful (not too broad like "Stuff")
    - It's general enough to be reusable (not "That one time I bought a thing")
    - It helps answer "Where does my money go?" in the Sankey diagram
+   - IMPORTANT: For "Discretionary" spending, ALWAYS create specific subcategories! Don't just use the parent "Discretionary" category. Create "Restaurants & Cafes", "Clothing", "Entertainment", "Bars & Nightlife", etc.
+   - Use CSV Category hints (like "Restaurant and Bar") as strong signals to create appropriate subcategories
 
 EXAMPLES OF GOOD CATEGORIZATION:
 Example 1: "Sold by Amazon", description "Nike Running Shoes"

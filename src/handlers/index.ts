@@ -4,4 +4,5 @@ export { handleGetExpenses } from './expenses';
 export { handleGetCategories, handleCreateCategory } from './categories';
 export { handleGetReviewQueue, handleGetReviewItem, handleCategorizeReview, handleRetryReview } from './review';
 export { handleGetStats, handleGetUncategorized, handleCompareRuns } from './stats';
+export { handleUpdateAnnotation, handleGetCategorization } from './categorizations';
 

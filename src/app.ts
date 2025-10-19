@@ -16,6 +16,8 @@ import {
   handleGetStats,
   handleGetUncategorized,
   handleCompareRuns,
+  handleUpdateAnnotation,
+  handleGetCategorization,
 } from "./handlers";
 
 const logger = createLogger('app');
@@ -81,6 +83,24 @@ export const server = Bun.serve({
 
     if (url.pathname === "/api/categories" && request.method === "POST") {
       return handleCreateCategory(request);
+    }
+
+    // Categorizations
+    if (url.pathname.match(/^\/api\/categorizations\/[^/]+$/) && request.method === "GET") {
+      const expenseId = url.pathname.split("/").pop()!;
+      return handleGetCategorization(expenseId);
+    }
+
+    if (url.pathname.match(/^\/api\/categorizations\/[^/]+\/annotation$/) && request.method === "PATCH") {
+      const pathParts = url.pathname.split("/");
+      const expenseId = pathParts[3];
+      if (!expenseId) {
+        return new Response(JSON.stringify({ error: "Invalid expense ID" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return handleUpdateAnnotation(expenseId, request);
     }
 
     // Review queue

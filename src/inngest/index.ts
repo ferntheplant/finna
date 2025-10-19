@@ -1,12 +1,22 @@
 import { processExpenses } from './processExpenses';
 import { categorizeExpense } from './categorizeExpense';
 import { retryReviewCategorization } from './retryReviewCategorization';
+import { completeReviewedExpense } from './completeReviewedExpense';
+import {
+  trackRunCompletion,
+  trackRunCompletionFromReview,
+  trackRunCompletionFromFailure,
+} from './trackRunCompletion';
 import logger from '../logger';
 
 export const functions = [
   processExpenses,
   categorizeExpense,
   retryReviewCategorization,
+  completeReviewedExpense,
+  trackRunCompletion,
+  trackRunCompletionFromReview,
+  trackRunCompletionFromFailure,
 ];
 
 // Validate functions on initialization

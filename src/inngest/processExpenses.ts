@@ -34,6 +34,7 @@ export const processExpenses = inngest.createFunction(
         totalExpenses: count,
         categorizedCount: 0,
         reviewQueueCount: 0,
+        failedCount: 0,
         startedAt: new Date().toISOString(),
       });
 
@@ -49,11 +50,10 @@ export const processExpenses = inngest.createFunction(
       return exp;
     });
 
-    // Step 3: Trigger categorization for each expense with random spacing
+    // Step 3: Trigger categorization for each expense
     // Only categorize top-level expenses (not sub-expenses)
     // Sub-expenses are created during review and get categorized then
-    // We send events in small batches with random delays to avoid overwhelming local LLM
-    const topLevelExpenseCount = await step.run('trigger-categorizations', async () => {
+    await step.run('trigger-categorizations', async () => {
       // Filter to only top-level expenses (non-sub-expenses)
       const topLevelExpenses = expenses.filter(exp => !exp.isSubExpense);
 
@@ -77,7 +77,7 @@ export const processExpenses = inngest.createFunction(
       // The throttle config (2 per 15s) will automatically queue and space them out
       await inngest.send(events);
 
-      logger.info(`→ Triggered ${events.length} categorization workflows`, {
+      logger.info(`✓ Triggered ${events.length} categorization workflows`, {
         runId,
         count: events.length,
         note: 'Throttling will space these at 2 per 15 seconds'
@@ -86,45 +86,19 @@ export const processExpenses = inngest.createFunction(
       return topLevelExpenses.length;
     });
 
-    // Step 4: Wait for completion event (sent by the last categorization)
-    // Very generous timeout for local LLM processing of large batches
-    // At 2 per 15s (8 per minute), we can process ~480 expenses/hour
-    // 12 hour timeout allows for ~5,760 expenses
-    const completionEvent = await step.waitForEvent('wait-for-completion', {
-      event: 'expenses/processing.completed',
-      timeout: '12h',  // 12 hours for large batches with local LLM
-      if: `async.data.runId == '${runId}'`,
-    });
-
-    // Step 5: Mark run as completed
-    await step.run('complete-run', async () => {
-      const status = completionEvent ? 'completed' : 'completed'; // completed either way, timeout just means it took longer
-
-      await updateWorkflowRun(runId, {
-        status,
-        completedAt: new Date().toISOString(),
-      });
-
-      if (completionEvent) {
-        logger.info(`✓ Workflow completed`, {
-          runId,
-          totalExpenses,
-          categorized: completionEvent.data.categorizedCount,
-          reviewQueue: completionEvent.data.reviewQueueCount
-        });
-      } else {
-        logger.warn(`⚠ Workflow timed out waiting for completion`, {
-          runId,
-          totalExpenses,
-          message: 'Categorizations may still be running in background'
-        });
-      }
+    // Workflow completes here - categorizations will run in background
+    // Completion is tracked by the trackRunCompletion workflow
+    logger.info(`✓ Process expenses workflow completed`, {
+      runId,
+      totalExpenses,
+      message: 'Categorization workflows triggered and running in background'
     });
 
     return {
       runId,
       totalExpenses,
-      message: 'Expense processing workflow completed',
+      status: 'categorization_started',
+      message: 'Categorization workflows triggered successfully',
     };
   }
 );

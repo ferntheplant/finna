@@ -26,15 +26,45 @@ type ExpenseCategorizationComplete = {
   };
 };
 
+type ExpenseCategorized = {
+  name: "expenses/expense.categorized";
+  data: {
+    runId: string;
+    expenseId: string;
+    categoryId: string;
+    source: "auto" | "manual" | "retry_auto";
+  };
+};
+
+type ExpenseNeedsReview = {
+  name: "expenses/expense.needs_review";
+  data: {
+    runId: string;
+    expenseId: string;
+    reason: "low_confidence" | "obfuscated_merchant" | "new_category_suggestion";
+  };
+};
+
+type ExpenseFailed = {
+  name: "expenses/expense.failed";
+  data: {
+    runId: string;
+    expenseId: string;
+    error: string;
+  };
+};
+
 type ReviewItemResolved = {
   name: "review/item.resolved";
   data: {
-    reviewItemId?: string; // Optional for auto-resolved retries
+    reviewItemId: string;
     expenseId: string;
     categoryId: string;
-    wasSplit?: boolean; // Optional flag when expense was split
-    subExpenseIds?: string[]; // Optional list of sub-expense IDs
-    alreadySaved?: boolean; // Optional flag when categorization already saved (auto-resolved retries)
+    resolution?: {
+      type?: "split" | "categorize";
+      reasoning?: string;
+      subExpenseIds?: string[];
+    };
   };
 };
 
@@ -79,6 +109,9 @@ export const schemas = new EventSchemas().fromUnion<
   ExpenseProcessingStarted |
   ExpenseCategorize |
   ExpenseCategorizationComplete |
+  ExpenseCategorized |
+  ExpenseNeedsReview |
+  ExpenseFailed |
   ReviewItemResolved |
   ReviewRetryRequested |
   ReviewSuggestionUpdated |
