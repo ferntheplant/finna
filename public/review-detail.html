@@ -108,6 +108,38 @@
       color: #64748b;
     }
 
+    .retry-status-banner {
+      padding: 15px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+      font-weight: 500;
+    }
+
+    .retry-in-progress-banner {
+      background: #fef3c7;
+      color: #92400e;
+      border-left: 4px solid #f59e0b;
+      animation: pulse 2s infinite;
+    }
+
+    .retry-completed-banner {
+      background: #d1fae5;
+      color: #065f46;
+      border-left: 4px solid #10b981;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0.7;
+      }
+    }
+
     .form-group {
       margin-bottom: 20px;
     }
@@ -390,6 +422,35 @@
       color: #111;
       word-break: break-word;
     }
+
+    .suggestion-actions {
+      margin-top: 12px;
+      display: flex;
+      gap: 10px;
+    }
+
+    .btn-accept-suggestion {
+      background: #10b981;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: background 0.2s;
+    }
+
+    .btn-accept-suggestion:hover {
+      background: #059669;
+    }
+
+    .category-path {
+      color: #6366f1;
+      font-weight: 600;
+      margin-top: 8px;
+      font-size: 14px;
+    }
   </style>
 </head>
 
@@ -404,6 +465,8 @@
       <div class="card">
         <h1>Review Expense</h1>
         <p class="subtitle" id="reason-text"></p>
+
+        <div id="retry-status-banner" style="display: none;"></div>
 
         <div class="expense-details">
           <div class="detail-group">
@@ -429,6 +492,8 @@
           <div class="reasoning" id="llm-reasoning"></div>
           <div class="confidence" id="llm-confidence"></div>
           <div class="confidence" id="llm-category"></div>
+          <div class="category-path" id="llm-category-path"></div>
+          <div class="suggestion-actions" id="suggestion-actions"></div>
         </div>
 
         <div id="raw-data-section" class="raw-data-section" style="display: none;">
@@ -466,20 +531,13 @@
           </div>
           <div class="amazon-form" id="amazon-form">
             <p style="margin-bottom: 10px; color: #666; font-size: 14px;">
-              Paste the JSON data from parse-amazon.js to automatically split this expense by items:
+              Paste the JSON data from parse-amazon.js (getOrderDetails()) to automatically split this expense by items:
             </p>
             <label style="font-size: 13px; font-weight: 600; color: #333; margin-bottom: 5px; display: block;">
-              Purchase Items JSON:
+              Order Details JSON:
             </label>
-            <textarea id="amazon-items-json" class="textarea-field"
-              placeholder='[{"itemTitle": "Product Name", "orderedMerchant": "Seller Name", "unitPrice": "$24.99"}, ...]'
-              oninput="parseAmazonData()"></textarea>
-
-            <label style="font-size: 13px; font-weight: 600; color: #333; margin-bottom: 5px; display: block;">
-              Charge Summary JSON (optional):
-            </label>
-            <textarea id="amazon-summary-json" class="textarea-field"
-              placeholder='[{"label": "Items:", "content": "$149.99"}, {"label": "Shipping:", "content": "$5.99"}, {"label": "Tax:", "content": "$12.50"}, {"label": "Grand Total:", "content": "$168.48"}]'
+            <textarea id="amazon-order-json" class="textarea-field"
+              placeholder='{"items": [{"itemTitle": "Product Name", "orderedMerchant": "Seller Name", "unitPrice": "$24.99"}], "summary": [{"label": "Grand Total:", "content": "$168.48"}]}'
               oninput="parseAmazonData()"></textarea>
 
             <div id="amazon-preview"></div>
@@ -489,6 +547,9 @@
         <div class="actions">
           <button class="btn btn-primary" id="submit-btn" onclick="submitCategorization()" disabled>
             Categorize Expense
+          </button>
+          <button class="btn btn-secondary" onclick="retryLLMCategorization()" id="retry-btn">
+            🔄 Retry LLM
           </button>
           <button class="btn btn-secondary" onclick="window.location.href='/review'">
             Cancel
@@ -502,8 +563,7 @@
     let currentItem = null;
     let allCategories = [];
     let selectedCategoryId = null;
-    let amazonItems = null;
-    let amazonChargeSummary = null;
+    let amazonOrderDetails = null;
 
     async function loadData() {
       const reviewId = window.location.pathname.split('/').pop();
@@ -553,6 +613,20 @@
       }
       document.getElementById('reason-text').textContent = reasonText;
 
+      // Retry status banner
+      const retryBanner = document.getElementById('retry-status-banner');
+      if (currentItem.retryingAt) {
+        retryBanner.className = 'retry-status-banner retry-in-progress-banner';
+        retryBanner.textContent = '🔄 AI retry in progress... The suggestion below will update automatically when complete.';
+        retryBanner.style.display = 'block';
+      } else if (currentItem.retryCount > 0) {
+        retryBanner.className = 'retry-status-banner retry-completed-banner';
+        retryBanner.textContent = `✓ AI has re-analyzed this expense ${currentItem.retryCount} time${currentItem.retryCount > 1 ? 's' : ''} with updated information. Review the suggestion below.`;
+        retryBanner.style.display = 'block';
+      } else {
+        retryBanner.style.display = 'none';
+      }
+
       // LLM suggestion
       if (currentItem.llmSuggestion) {
         const suggestion = currentItem.llmSuggestion;
@@ -564,17 +638,51 @@
             `Confidence: ${(suggestion.confidence * 100).toFixed(0)}%`;
         }
 
+        const actionsDiv = document.getElementById('suggestion-actions');
+        const pathDiv = document.getElementById('llm-category-path');
+        actionsDiv.innerHTML = '';
+        pathDiv.textContent = '';
+
+        // Handle existing category suggestion
         if (suggestion.categoryId) {
           const category = allCategories.find(c => c.id === suggestion.categoryId);
           if (category) {
             document.getElementById('llm-category').textContent =
-              `Suggested: ${category.path}`;
+              `Suggested: ${category.name}`;
+            pathDiv.textContent = `Path: ${category.path}`;
+
+            // Add accept button
+            const acceptBtn = document.createElement('button');
+            acceptBtn.className = 'btn-accept-suggestion';
+            acceptBtn.textContent = '✓ Accept Suggestion';
+            acceptBtn.onclick = () => acceptExistingCategorySuggestion(suggestion.categoryId);
+            actionsDiv.appendChild(acceptBtn);
           }
         }
 
+        // Handle new category suggestion
         if (suggestion.newCategory) {
+          const parentCategory = allCategories.find(c => c.id === suggestion.newCategory.parentId);
+          const parentPath = parentCategory ? parentCategory.path : 'Unknown';
+
           document.getElementById('llm-category').textContent =
-            `Suggested new: ${suggestion.newCategory.name} - ${suggestion.newCategory.description}`;
+            `Suggested new: ${suggestion.newCategory.name}`;
+          pathDiv.textContent = `Will be created under: ${parentPath} → ${suggestion.newCategory.name}`;
+
+          // Show description
+          const descDiv = document.createElement('div');
+          descDiv.style.marginTop = '4px';
+          descDiv.style.fontSize = '13px';
+          descDiv.style.color = '#666';
+          descDiv.textContent = suggestion.newCategory.description;
+          document.getElementById('llm-category').appendChild(descDiv);
+
+          // Add accept button
+          const acceptBtn = document.createElement('button');
+          acceptBtn.className = 'btn-accept-suggestion';
+          acceptBtn.textContent = '✓ Accept & Create Category';
+          acceptBtn.onclick = () => acceptNewCategorySuggestion(suggestion.newCategory);
+          actionsDiv.appendChild(acceptBtn);
         }
       }
 
@@ -661,12 +769,14 @@
 
     function populateParentCategories() {
       const select = document.getElementById('new-category-parent');
+      // Show all categories except Root (id "0") so you can create subcategories under any category
       allCategories
-        .filter(cat => cat.parentId === '0') // Only top-level categories
+        .filter(cat => cat.id !== '0') // Exclude Root itself
+        .sort((a, b) => a.path.localeCompare(b.path)) // Sort by full path for hierarchy
         .forEach(cat => {
           const option = document.createElement('option');
           option.value = cat.id;
-          option.textContent = cat.name;
+          option.textContent = cat.path; // Show full path so user knows where it is
           select.appendChild(option);
         });
     }
@@ -710,54 +820,49 @@
         document.getElementById('new-category-form').classList.remove('active');
       } else {
         // When closing Amazon form, clear the data
-        amazonItems = null;
-        amazonChargeSummary = null;
-        document.getElementById('amazon-items-json').value = '';
-        document.getElementById('amazon-summary-json').value = '';
+        amazonOrderDetails = null;
+        document.getElementById('amazon-order-json').value = '';
         document.getElementById('amazon-preview').innerHTML = '';
         document.getElementById('submit-btn').disabled = true;
       }
     }
 
     function parseAmazonData() {
-      const itemsText = document.getElementById('amazon-items-json').value.trim();
-      const summaryText = document.getElementById('amazon-summary-json').value.trim();
+      const orderText = document.getElementById('amazon-order-json').value.trim();
       const previewDiv = document.getElementById('amazon-preview');
 
-      if (!itemsText) {
+      if (!orderText) {
         previewDiv.innerHTML = '';
-        amazonItems = null;
-        amazonChargeSummary = null;
+        amazonOrderDetails = null;
         document.getElementById('submit-btn').disabled = true;
         return;
       }
 
       try {
-        // Parse items JSON
-        amazonItems = JSON.parse(itemsText);
+        // Parse order details JSON
+        const orderData = JSON.parse(orderText);
 
-        if (!Array.isArray(amazonItems) || amazonItems.length === 0) {
-          throw new Error('Items must be a non-empty array');
+        // Validate structure
+        if (!orderData.items || !Array.isArray(orderData.items) || orderData.items.length === 0) {
+          throw new Error('Order data must have an "items" array with at least one item');
         }
 
         // Validate item structure
-        for (const item of amazonItems) {
+        for (const item of orderData.items) {
           if (!item.itemTitle || !item.unitPrice) {
             throw new Error('Each item must have itemTitle and unitPrice');
           }
         }
 
-        // Parse summary JSON if provided
-        amazonChargeSummary = null;
-        if (summaryText) {
-          amazonChargeSummary = JSON.parse(summaryText);
-          if (!Array.isArray(amazonChargeSummary)) {
-            throw new Error('Summary must be an array');
-          }
+        // Validate summary if provided
+        if (orderData.summary && !Array.isArray(orderData.summary)) {
+          throw new Error('Summary must be an array if provided');
         }
 
+        amazonOrderDetails = orderData;
+
         // Calculate totals and validate
-        const itemsTotal = amazonItems.reduce((sum, item) => {
+        const itemsTotal = orderData.items.reduce((sum, item) => {
           const price = parseFloat(item.unitPrice.replace(/[$,]/g, ''));
           return sum + price;
         }, 0);
@@ -765,8 +870,8 @@
         let grandTotal = itemsTotal;
         let hasGrandTotal = false;
 
-        if (amazonChargeSummary) {
-          const grandTotalItem = amazonChargeSummary.find(item =>
+        if (orderData.summary) {
+          const grandTotalItem = orderData.summary.find(item =>
             item.label && item.label.toLowerCase().includes('grand total')
           );
           if (grandTotalItem && grandTotalItem.content) {
@@ -777,10 +882,10 @@
 
         // Build preview
         let html = '<div class="amazon-preview">';
-        html += '<h4>📦 Purchase Items (' + amazonItems.length + ')</h4>';
+        html += '<h4>📦 Purchase Items (' + orderData.items.length + ')</h4>';
         html += '<div class="amazon-items-list">';
 
-        amazonItems.forEach(item => {
+        orderData.items.forEach(item => {
           const price = parseFloat(item.unitPrice.replace(/[$,]/g, ''));
           html += '<div class="amazon-item">';
           html += '<div class="amazon-item-title">' + escapeHtml(item.itemTitle) + '</div>';
@@ -796,11 +901,11 @@
         html += '</div>';
 
         // Show summary if provided
-        if (amazonChargeSummary && amazonChargeSummary.length > 0) {
+        if (orderData.summary && orderData.summary.length > 0) {
           html += '<h4>💰 Charge Summary</h4>';
           html += '<div class="amazon-summary-list">';
 
-          amazonChargeSummary.forEach(item => {
+          orderData.summary.forEach(item => {
             const isGrandTotal = item.label && item.label.toLowerCase().includes('grand total');
             html += '<div class="amazon-summary-item' + (isGrandTotal ? ' grand-total' : '') + '">';
             html += '<span>' + escapeHtml(item.label) + '</span>';
@@ -832,7 +937,7 @@
             html += '</div>';
           }
           document.getElementById('submit-btn').disabled = false;
-          document.getElementById('submit-btn').textContent = 'Split Into ' + amazonItems.length + ' Items';
+          document.getElementById('submit-btn').textContent = 'Split Into ' + orderData.items.length + ' Items';
         }
 
         html += '</div>';
@@ -840,8 +945,7 @@
 
       } catch (error) {
         previewDiv.innerHTML = '<div class="validation-error"><strong>Parse Error:</strong> ' + escapeHtml(error.message) + '</div>';
-        amazonItems = null;
-        amazonChargeSummary = null;
+        amazonOrderDetails = null;
         document.getElementById('submit-btn').disabled = true;
       }
     }
@@ -852,6 +956,102 @@
       return div.innerHTML;
     }
 
+    async function retryLLMCategorization() {
+      const reviewId = window.location.pathname.split('/').pop();
+      const retryBtn = document.getElementById('retry-btn');
+
+      retryBtn.disabled = true;
+      retryBtn.textContent = '🔄 Retrying...';
+
+      try {
+        const response = await fetch(`/api/review/${reviewId}/retry`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(result.error || 'Failed to retry categorization');
+        }
+
+        // Reload the page to show updated suggestion
+        window.location.reload();
+      } catch (error) {
+        alert('Error: ' + error.message);
+        retryBtn.disabled = false;
+        retryBtn.textContent = '🔄 Retry LLM';
+      }
+    }
+
+    async function acceptExistingCategorySuggestion(categoryId) {
+      const reviewId = window.location.pathname.split('/').pop();
+
+      // Disable the accept button to prevent double-clicks
+      const acceptBtn = event.target;
+      acceptBtn.disabled = true;
+      acceptBtn.textContent = 'Submitting...';
+
+      try {
+        const response = await fetch(`/api/review/${reviewId}/categorize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            categoryId: categoryId
+          })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(result.error || 'Failed to categorize expense');
+        }
+
+        // Success! Redirect back to review queue
+        window.location.href = '/review';
+      } catch (error) {
+        alert('Error: ' + error.message);
+        acceptBtn.disabled = false;
+        acceptBtn.textContent = '✓ Accept Suggestion';
+      }
+    }
+
+    async function acceptNewCategorySuggestion(newCategory) {
+      const reviewId = window.location.pathname.split('/').pop();
+
+      // Disable the accept button to prevent double-clicks
+      const acceptBtn = event.target;
+      acceptBtn.disabled = true;
+      acceptBtn.textContent = 'Submitting...';
+
+      try {
+        const response = await fetch(`/api/review/${reviewId}/categorize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            createNewCategory: {
+              name: newCategory.name,
+              description: newCategory.description,
+              parentId: newCategory.parentId
+            }
+          })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(result.error || 'Failed to categorize expense');
+        }
+
+        // Success! Redirect back to review queue
+        window.location.href = '/review';
+      } catch (error) {
+        alert('Error: ' + error.message);
+        acceptBtn.disabled = false;
+        acceptBtn.textContent = '✓ Accept & Create Category';
+      }
+    }
+
     async function submitCategorization() {
       const form = document.getElementById('new-category-form');
       const amazonForm = document.getElementById('amazon-form');
@@ -860,10 +1060,9 @@
       let payload;
 
       // Handle Amazon item split
-      if (amazonForm.classList.contains('active') && amazonItems && amazonItems.length > 0) {
+      if (amazonForm.classList.contains('active') && amazonOrderDetails && amazonOrderDetails.items && amazonOrderDetails.items.length > 0) {
         payload = {
-          amazonItems: amazonItems,
-          amazonChargeSummary: amazonChargeSummary
+          amazonOrderDetails: amazonOrderDetails
         };
       }
       // Handle new category creation

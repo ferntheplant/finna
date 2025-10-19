@@ -21,6 +21,7 @@ export type Category = {
 };
 
 // Categorization result linking expense to category
+// Includes denormalized expense data for easier analysis without joins
 export type Categorization = {
   expenseId: string;
   categoryId: string;
@@ -31,7 +32,12 @@ export type Categorization = {
     description: string;
     parentId: string;
   };
-  createdAt: string; // ISO timestamp
+  amount: number;
+  date: string; // ISO timestamp
+  description: string;
+  merchant: string;
+  createdAt: string; // ISO timestamp - when the expense was created
+  categorizedAt: string; // ISO timestamp - when this categorization was made
 };
 
 // Review queue item
@@ -52,6 +58,8 @@ export type ReviewQueueItem = {
   };
   status: 'pending' | 'resolved';
   createdAt: string;
+  retryCount: number;
+  retryingAt?: string | null;
 };
 
 // Sub-expense split for breaking up a transaction
@@ -72,6 +80,12 @@ export type AmazonPurchaseItem = {
 export type AmazonChargeSummaryItem = {
   label: string; // e.g., "Grand Total:", "Shipping & Handling:"
   content: string; // e.g., "$159.60"
+};
+
+// Amazon order details - the new format returned by parse-amazon.js
+export type AmazonOrderDetails = {
+  items: AmazonPurchaseItem[];
+  summary: AmazonChargeSummaryItem[];
 };
 
 // Workflow run metadata

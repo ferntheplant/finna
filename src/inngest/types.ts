@@ -29,9 +29,39 @@ type ExpenseCategorizationComplete = {
 type ReviewItemResolved = {
   name: "review/item.resolved";
   data: {
-    reviewItemId: string;
+    reviewItemId?: string; // Optional for auto-resolved retries
     expenseId: string;
     categoryId: string;
+    wasSplit?: boolean; // Optional flag when expense was split
+    subExpenseIds?: string[]; // Optional list of sub-expense IDs
+    alreadySaved?: boolean; // Optional flag when categorization already saved (auto-resolved retries)
+  };
+};
+
+type ReviewRetryRequested = {
+  name: "review/retry.requested";
+  data: {
+    reviewItemId: string;
+  };
+};
+
+type ReviewSuggestionUpdated = {
+  name: "review/suggestion.updated";
+  data: {
+    reviewItemId: string;
+    expenseId: string;
+    runId: string;
+    suggestion: {
+      action: string;
+      reasoning: string;
+      categoryId?: string;
+      confidence?: number;
+      newCategory?: {
+        name: string;
+        description: string;
+        parentId?: string;
+      };
+    };
   };
 };
 
@@ -50,5 +80,7 @@ export const schemas = new EventSchemas().fromUnion<
   ExpenseCategorize |
   ExpenseCategorizationComplete |
   ReviewItemResolved |
+  ReviewRetryRequested |
+  ReviewSuggestionUpdated |
   ExpenseProcessingCompleted
 >();

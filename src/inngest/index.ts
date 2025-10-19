@@ -1,10 +1,12 @@
 import { processExpenses } from './processExpenses';
 import { categorizeExpense } from './categorizeExpense';
+import { retryReviewCategorization } from './retryReviewCategorization';
 import logger from '../logger';
 
 export const functions = [
   processExpenses,
   categorizeExpense,
+  retryReviewCategorization,
 ];
 
 // Validate functions on initialization

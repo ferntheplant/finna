@@ -5,6 +5,15 @@ import { createLogger } from './logger';
 
 const logger = createLogger('db');
 
+// Utility function to clean up strings from CSV data
+// Normalizes whitespace, removes extra newlines, and trims
+function cleanCsvString(str: string | null | undefined): string {
+  if (!str) return '';
+  return str
+    .replace(/\s+/g, ' ')  // Replace any whitespace (including newlines, tabs) with a single space
+    .trim();               // Remove leading/trailing whitespace
+}
+
 // Initialize all required tables
 export async function initializeTables() {
   // Categories table
@@ -30,6 +39,7 @@ export async function initializeTables() {
   }
 
   // Categorizations table (links expenses to categories)
+  // Includes denormalized expense data so we don't need to join with expenses table for analysis
   await conn.run(`
     CREATE TABLE IF NOT EXISTS categorizations (
       expenseId VARCHAR PRIMARY KEY,
@@ -39,7 +49,12 @@ export async function initializeTables() {
       suggestedNewCategoryName VARCHAR,
       suggestedNewCategoryDescription VARCHAR,
       suggestedNewCategoryParentId VARCHAR,
-      createdAt TIMESTAMP NOT NULL
+      amount DOUBLE NOT NULL,
+      date TIMESTAMP NOT NULL,
+      description VARCHAR NOT NULL,
+      merchant VARCHAR NOT NULL,
+      createdAt TIMESTAMP NOT NULL,
+      categorizedAt TIMESTAMP NOT NULL
     )
   `);
 
@@ -57,7 +72,9 @@ export async function initializeTables() {
       llmSuggestionNewCategoryDescription VARCHAR,
       llmSuggestionNewCategoryParentId VARCHAR,
       status VARCHAR NOT NULL,
-      createdAt TIMESTAMP NOT NULL
+      createdAt TIMESTAMP NOT NULL,
+      retryCount INTEGER DEFAULT 0,
+      retryingAt TIMESTAMP
     )
   `);
 
@@ -85,6 +102,7 @@ export async function ingestCreditCardCSV(filePath: string, runId: string): Prom
   // Keep all original CSV columns (*) but exclude ones we're normalizing
   // Generate stable IDs based on content hash so same expense always gets same ID
   // Filter out negative charges (bill payments)
+  // Clean up strings: normalize whitespace, remove newlines/tabs
   await conn.run(`
     CREATE TABLE ${tableName} AS
     SELECT
@@ -92,11 +110,11 @@ export async function ingestCreditCardCSV(filePath: string, runId: string): Prom
       'exp_' || md5(COALESCE(Date::VARCHAR, '') || COALESCE(Description, '') || COALESCE(CAST(Amount as VARCHAR), '') || COALESCE("Appears On Your Statement As", ''))::VARCHAR as id,
       '${runId}' as runId,
       strptime(Date::VARCHAR, '%Y-%m-%d') as date,
-      Description as description,
+      TRIM(REGEXP_REPLACE(COALESCE(Description, ''), '\\s+', ' ', 'g')) as description,
       CAST(Amount as DOUBLE) as amount,
-      "Appears On Your Statement As" as merchant,
+      TRIM(REGEXP_REPLACE(COALESCE("Appears On Your Statement As", ''), '\\s+', ' ', 'g')) as merchant,
       'credit_card' as source,
-      NULL as parentExpenseId,
+      CAST(NULL AS VARCHAR) as parentExpenseId,
       false as isSubExpense,
       Date as rawDate,
       Description as rawDescription,
@@ -124,6 +142,7 @@ export async function ingestBankStatementCSV(filePath: string, runId: string): P
   // Keep all original CSV columns (*) but exclude ones we're normalizing
   // Generate stable IDs based on content hash so same expense always gets same ID
   // Filter out negative charges (bill payments)
+  // Clean up strings: normalize whitespace, remove newlines/tabs
   await conn.run(`
     CREATE TABLE ${tableName} AS
     SELECT
@@ -131,11 +150,11 @@ export async function ingestBankStatementCSV(filePath: string, runId: string): P
       'exp_' || md5(COALESCE("Posting Date"::VARCHAR, '') || COALESCE(Description, '') || COALESCE(CAST(Amount as VARCHAR), ''))::VARCHAR as id,
       '${runId}' as runId,
       strptime("Posting Date"::VARCHAR, '%Y-%m-%d') as date,
-      Description as description,
+      TRIM(REGEXP_REPLACE(COALESCE(Description, ''), '\\s+', ' ', 'g')) as description,
       CAST(Amount as DOUBLE) as amount,
-      Description as merchant,
+      TRIM(REGEXP_REPLACE(COALESCE(Description, ''), '\\s+', ' ', 'g')) as merchant,
       'bank_statement' as source,
-      NULL as parentExpenseId,
+      CAST(NULL AS VARCHAR) as parentExpenseId,
       false as isSubExpense,
       "Posting Date" as rawPostingDate,
       Description as rawDescription,
@@ -235,6 +254,23 @@ export async function getAllCategories(): Promise<Category[]> {
   }));
 }
 
+export async function findCategoryByNameAndParent(name: string, parentId: string | null): Promise<Category | null> {
+  const reader = await conn.runAndReadAll(
+    "SELECT * FROM categories WHERE LOWER(name) = LOWER(?) AND parentId = ?",
+    [name, parentId]
+  );
+  const rows = reader.getRowObjectsJS();
+  if (rows.length === 0) return null;
+
+  const row: any = rows[0];
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    parentId: row.parentId,
+  };
+}
+
 export async function createCategory(category: Category): Promise<void> {
   try {
     await conn.run(
@@ -256,8 +292,8 @@ export async function saveCategorization(categorization: Categorization): Promis
   try {
     await conn.run(
       `INSERT OR REPLACE INTO categorizations
-       (expenseId, categoryId, confidence, reasoning, suggestedNewCategoryName, suggestedNewCategoryDescription, suggestedNewCategoryParentId, createdAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       (expenseId, categoryId, confidence, reasoning, suggestedNewCategoryName, suggestedNewCategoryDescription, suggestedNewCategoryParentId, amount, date, description, merchant, createdAt, categorizedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         categorization.expenseId,
         categorization.categoryId,
@@ -266,7 +302,12 @@ export async function saveCategorization(categorization: Categorization): Promis
         categorization.suggestedNewCategory?.name || null,
         categorization.suggestedNewCategory?.description || null,
         categorization.suggestedNewCategory?.parentId || null,
-        categorization.createdAt
+        categorization.amount,
+        categorization.date,
+        categorization.description,
+        categorization.merchant,
+        categorization.createdAt,
+        categorization.categorizedAt
       ]
     );
   } catch (error) {
@@ -299,7 +340,12 @@ export async function getCategorization(expenseId: string): Promise<Categorizati
       description: row.suggestedNewCategoryDescription,
       parentId: row.suggestedNewCategoryParentId,
     } : undefined,
+    amount: row.amount,
+    date: row.date?.toISOString() || '',
+    description: row.description,
+    merchant: row.merchant,
     createdAt: row.createdAt,
+    categorizedAt: row.categorizedAt,
   };
 }
 
@@ -341,8 +387,8 @@ export async function addToReviewQueue(item: ReviewQueueItem): Promise<void> {
     await conn.run(
       `INSERT OR IGNORE INTO review_queue
        (id, expenseId, runId, reason, llmSuggestionCategoryId, llmSuggestionConfidence, llmSuggestionReasoning,
-        llmSuggestionNewCategoryName, llmSuggestionNewCategoryDescription, llmSuggestionNewCategoryParentId, status, createdAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        llmSuggestionNewCategoryName, llmSuggestionNewCategoryDescription, llmSuggestionNewCategoryParentId, status, createdAt, retryCount, retryingAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         item.id,
         item.expenseId,
@@ -355,7 +401,9 @@ export async function addToReviewQueue(item: ReviewQueueItem): Promise<void> {
         item.llmSuggestion?.newCategory?.description || null,
         item.llmSuggestion?.newCategory?.parentId || null,
         item.status,
-        item.createdAt
+        item.createdAt,
+        item.retryCount || 0,
+        item.retryingAt || null
       ]
     );
 
@@ -397,6 +445,8 @@ export async function getReviewQueue(runId?: string): Promise<ReviewQueueItem[]>
     } : undefined,
     status: row.status,
     createdAt: row.createdAt,
+    retryCount: row.retryCount || 0,
+    retryingAt: row.retryingAt || null,
   }));
 }
 
@@ -423,7 +473,74 @@ export async function getReviewQueueItem(id: string): Promise<ReviewQueueItem | 
     } : undefined,
     status: row.status,
     createdAt: row.createdAt,
+    retryCount: row.retryCount || 0,
+    retryingAt: row.retryingAt || null,
   };
+}
+
+export async function markRetryInProgress(id: string): Promise<void> {
+  try {
+    const now = new Date().toISOString();
+    await conn.run(
+      "UPDATE review_queue SET retryingAt = ? WHERE id = ?",
+      [now, id]
+    );
+    logger.debug({ itemId: id, retryingAt: now }, 'Marked retry as in progress');
+  } catch (error) {
+    logger.error({
+      itemId: id,
+      error: error instanceof Error ? error.message : error,
+      stack: error instanceof Error ? error.stack : undefined
+    }, 'Failed to mark retry as in progress');
+    throw error;
+  }
+}
+
+export async function updateReviewQueueItemSuggestion(
+  id: string,
+  suggestion: {
+    categoryId?: string;
+    confidence?: number;
+    reasoning: string;
+    newCategory?: {
+      name: string;
+      description: string;
+      parentId?: string;
+    };
+  }
+): Promise<void> {
+  try {
+    // Update suggestion AND increment retry count, clear retrying status
+    await conn.run(
+      `UPDATE review_queue SET
+        llmSuggestionCategoryId = ?,
+        llmSuggestionConfidence = ?,
+        llmSuggestionReasoning = ?,
+        llmSuggestionNewCategoryName = ?,
+        llmSuggestionNewCategoryDescription = ?,
+        llmSuggestionNewCategoryParentId = ?,
+        retryCount = retryCount + 1,
+        retryingAt = NULL
+      WHERE id = ?`,
+      [
+        suggestion.categoryId || null,
+        suggestion.confidence || null,
+        suggestion.reasoning,
+        suggestion.newCategory?.name || null,
+        suggestion.newCategory?.description || null,
+        suggestion.newCategory?.parentId || null,
+        id,
+      ]
+    );
+    logger.debug({ itemId: id }, 'Updated review queue item suggestion and incremented retry count');
+  } catch (error) {
+    logger.error({
+      itemId: id,
+      error: error instanceof Error ? error.message : error,
+      stack: error instanceof Error ? error.stack : undefined
+    }, 'Failed to update review queue item suggestion');
+    throw error;
+  }
 }
 
 export async function resolveReviewQueueItem(id: string): Promise<void> {
@@ -593,9 +710,9 @@ export async function createSubExpenses(
           subExpenseId,
           parentExpense.runId,
           parentExpense.date,
-          split.description,
+          cleanCsvString(split.description),
           split.amount,
-          split.merchant || parentExpense.merchant,
+          cleanCsvString(split.merchant || parentExpense.merchant),
           parentExpense.source,
           parentExpense.id,
           true
@@ -658,5 +775,109 @@ export async function getSubExpenses(runId: string, parentExpenseId: string): Pr
       rawData: Object.keys(rawData).length > 0 ? rawData : undefined,
     };
   });
+}
+
+// Similarity search for already-categorized expenses
+export type SimilarCategorizedExpense = {
+  merchant: string;
+  description: string;
+  amount: number;
+  categoryId: string;
+  categoryName: string;
+  similarityScore: number;
+  reasoning: string;
+};
+
+/**
+ * Finds similar already-categorized expenses to help with categorization
+ * Uses fuzzy string matching on merchant and description fields
+ * Returns top N most similar expenses with their categories
+ */
+export async function getSimilarCategorizedExpenses(
+  merchant: string,
+  description: string,
+  limit: number = 5
+): Promise<SimilarCategorizedExpense[]> {
+  try {
+    // Use multiple similarity metrics for fuzzy matching:
+    // 1. Exact matches (case-insensitive)
+    // 2. Substring matches (partial matches)
+    // 3. Jaccard similarity on word sets (DuckDB built-in)
+    // 4. Levenshtein distance normalized
+
+    // Score both merchant and description, with description weighted higher
+    const reader = await conn.runAndReadAll(
+      `
+      SELECT
+        c.merchant,
+        c.description,
+        c.amount,
+        c.categoryId,
+        cat.name as categoryName,
+        c.reasoning,
+        -- Calculate similarity scores using multiple metrics
+        (
+          -- Merchant similarity (30% weight)
+          (
+            CASE
+              WHEN LOWER(c.merchant) = LOWER(?) THEN 1.0
+              WHEN LOWER(c.merchant) LIKE '%' || LOWER(?) || '%' THEN 0.8
+              WHEN LOWER(?) LIKE '%' || LOWER(c.merchant) || '%' THEN 0.8
+              ELSE GREATEST(0, 1.0 - (levenshtein(LOWER(c.merchant), LOWER(?)) / GREATEST(LENGTH(c.merchant), LENGTH(?), 1.0)))
+            END
+          ) * 0.3
+          +
+          -- Description similarity (70% weight)
+          (
+            CASE
+              WHEN LOWER(c.description) = LOWER(?) THEN 1.0
+              WHEN LOWER(c.description) LIKE '%' || LOWER(?) || '%' THEN 0.8
+              WHEN LOWER(?) LIKE '%' || LOWER(c.description) || '%' THEN 0.8
+              ELSE GREATEST(0, 1.0 - (levenshtein(LOWER(c.description), LOWER(?)) / GREATEST(LENGTH(c.description), LENGTH(?), 1.0)))
+            END
+          ) * 0.7
+        ) as similarityScore
+      FROM categorizations c
+      JOIN categories cat ON c.categoryId = cat.id
+      WHERE
+        -- Only consider expenses with some similarity
+        (
+          LOWER(c.merchant) LIKE '%' || LOWER(?) || '%' OR
+          LOWER(?) LIKE '%' || LOWER(c.merchant) || '%' OR
+          LOWER(c.description) LIKE '%' || LOWER(?) || '%' OR
+          LOWER(?) LIKE '%' || LOWER(c.description) || '%' OR
+          levenshtein(LOWER(c.merchant), LOWER(?)) <= 5 OR
+          levenshtein(LOWER(c.description), LOWER(?)) <= 10
+        )
+      ORDER BY similarityScore DESC
+      LIMIT ?
+      `,
+      [
+        merchant, merchant, merchant, merchant, merchant, // 5 merchant params
+        description, description, description, description, description, // 5 description params
+        merchant, merchant, description, description, merchant, description, // 6 WHERE clause params
+        limit
+      ]
+    );
+
+    return reader.getRowObjectsJS().map((row: any) => ({
+      merchant: row.merchant || '',
+      description: row.description || '',
+      amount: row.amount || 0,
+      categoryId: row.categoryId || '',
+      categoryName: row.categoryName || '',
+      similarityScore: row.similarityScore || 0,
+      reasoning: row.reasoning || '',
+    }));
+  } catch (error) {
+    logger.error({
+      merchant,
+      description,
+      error: error instanceof Error ? error.message : error,
+      stack: error instanceof Error ? error.stack : undefined
+    }, 'Failed to get similar categorized expenses');
+    // Return empty array on error rather than failing the categorization
+    return [];
+  }
 }
 

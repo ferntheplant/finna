@@ -12,6 +12,7 @@ import {
   handleGetReviewQueue,
   handleGetReviewItem,
   handleCategorizeReview,
+  handleRetryReview,
   handleGetStats,
   handleGetUncategorized,
   handleCompareRuns,
@@ -103,6 +104,18 @@ export const server = Bun.serve({
         });
       }
       return handleCategorizeReview(id, request);
+    }
+
+    if (url.pathname.match(/^\/api\/review\/[^/]+\/retry$/) && request.method === "POST") {
+      const pathParts = url.pathname.split("/");
+      const id = pathParts[3];
+      if (!id) {
+        return new Response(JSON.stringify({ error: "Invalid review ID" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return handleRetryReview(id);
     }
 
     // Stats and evaluation

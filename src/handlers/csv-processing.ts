@@ -18,7 +18,9 @@ export async function handleProcessCsv(request: Request): Promise<Response> {
       });
     }
 
-    const actualRunId = runId || `run_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+    // Generate runId with ISO timestamp for better human readability
+    // Replace colons and periods with underscores to make it safe for table names
+    const actualRunId = runId || `run_${new Date().toISOString().replace(/[:.]/g, '_')}_${Math.random().toString(36).substring(7)}`;
     logger.debug({ actualRunId }, 'Generated runId');
 
     logger.debug({

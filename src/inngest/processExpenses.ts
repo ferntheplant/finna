@@ -49,9 +49,10 @@ export const processExpenses = inngest.createFunction(
       return exp;
     });
 
-    // Step 3: Trigger categorization for each expense
+    // Step 3: Trigger categorization for each expense with random spacing
     // Only categorize top-level expenses (not sub-expenses)
     // Sub-expenses are created during review and get categorized then
+    // We send events in small batches with random delays to avoid overwhelming local LLM
     const topLevelExpenseCount = await step.run('trigger-categorizations', async () => {
       // Filter to only top-level expenses (non-sub-expenses)
       const topLevelExpenses = expenses.filter(exp => !exp.isSubExpense);
@@ -72,21 +73,26 @@ export const processExpenses = inngest.createFunction(
         },
       }));
 
+      // Send all events at once - Inngest's throttling will handle the spacing
+      // The throttle config (2 per 15s) will automatically queue and space them out
       await inngest.send(events);
 
       logger.info(`→ Triggered ${events.length} categorization workflows`, {
         runId,
-        count: events.length
+        count: events.length,
+        note: 'Throttling will space these at 2 per 15 seconds'
       });
 
       return topLevelExpenses.length;
     });
 
     // Step 4: Wait for completion event (sent by the last categorization)
-    // Timeout after 2 hours to handle edge cases
+    // Very generous timeout for local LLM processing of large batches
+    // At 2 per 15s (8 per minute), we can process ~480 expenses/hour
+    // 12 hour timeout allows for ~5,760 expenses
     const completionEvent = await step.waitForEvent('wait-for-completion', {
       event: 'expenses/processing.completed',
-      timeout: '2h',
+      timeout: '12h',  // 12 hours for large batches with local LLM
       if: `async.data.runId == '${runId}'`,
     });
 

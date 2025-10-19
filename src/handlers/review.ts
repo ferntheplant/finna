@@ -5,8 +5,11 @@ import {
   getExpense,
   saveCategorization,
   createCategory,
+  findCategoryByNameAndParent,
   createSubExpenses,
   validateSubExpenseSums,
+  getWorkflowRun,
+  updateWorkflowRun,
 } from '../db-operations';
 import { inngest } from '../inngest';
 import { createLogger } from '../logger';
@@ -65,12 +68,13 @@ export async function handleCategorizeReview(id: string, request: Request): Prom
       createNewCategory: newCategory,
       splitTransaction,
       amazonItems,
-      amazonChargeSummary
+      amazonChargeSummary,
+      amazonOrderDetails
     } = body;
 
-    if (!categoryId && !newCategory && !splitTransaction && !amazonItems) {
+    if (!categoryId && !newCategory && !splitTransaction && !amazonItems && !amazonOrderDetails) {
       return new Response(safeJsonStringify({
-        error: "categoryId, createNewCategory, splitTransaction, or amazonItems required"
+        error: "categoryId, createNewCategory, splitTransaction, amazonItems, or amazonOrderDetails required"
       }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
@@ -94,8 +98,8 @@ export async function handleCategorizeReview(id: string, request: Request): Prom
     }
 
     // Handle transaction splitting (manual or Amazon items)
-    if (splitTransaction || amazonItems) {
-      return await handleTransactionSplit(id, item, expense, splitTransaction, amazonItems, amazonChargeSummary);
+    if (splitTransaction || amazonItems || amazonOrderDetails) {
+      return await handleTransactionSplit(id, item, expense, splitTransaction, amazonItems, amazonChargeSummary, amazonOrderDetails);
     }
 
     // Handle normal categorization (no split)
@@ -116,13 +120,21 @@ async function handleTransactionSplit(
   expense: any,
   splitTransaction: any,
   amazonItems: any,
-  amazonChargeSummary: any
+  amazonChargeSummary: any,
+  amazonOrderDetails: any
 ): Promise<Response> {
   let subExpenseSplits: Array<{ description: string; amount: number; merchant?: string }> = [];
 
-  if (amazonItems) {
+  // Handle new format (single object with items and summary)
+  if (amazonOrderDetails) {
+    subExpenseSplits = parseAmazonItems(amazonOrderDetails.items, amazonOrderDetails.summary);
+  }
+  // Handle legacy format (separate items and summary)
+  else if (amazonItems) {
     subExpenseSplits = parseAmazonItems(amazonItems, amazonChargeSummary);
-  } else if (splitTransaction) {
+  }
+  // Handle manual split
+  else if (splitTransaction) {
     subExpenseSplits = splitTransaction;
   }
 
@@ -146,6 +158,36 @@ async function handleTransactionSplit(
 
   // Resolve review item
   await resolveReviewQueueItem(reviewId);
+
+  // Update workflow stats: decrement review queue count
+  // Note: We don't increment categorizedCount because the parent expense is being split, not categorized
+  // The sub-expenses will be categorized separately and will update stats on their own
+  const run = await getWorkflowRun(item.runId);
+  if (run) {
+    await updateWorkflowRun(item.runId, {
+      reviewQueueCount: run.reviewQueueCount - 1,
+    });
+
+    logger.info({
+      runId: item.runId,
+      expenseId: item.expenseId,
+      subExpenseCount: subExpenseIds.length,
+      newReviewQueueCount: run.reviewQueueCount - 1,
+    }, 'Split transaction resolved, updated workflow stats');
+  }
+
+  // Send event to unblock any workflow waiting for this review item
+  // Use a special categoryId to indicate this was split, not categorized
+  await inngest.send({
+    name: "review/item.resolved",
+    data: {
+      reviewItemId: reviewId,
+      expenseId: item.expenseId,
+      categoryId: "SPLIT", // Special marker indicating this expense was split into sub-expenses
+      wasSplit: true,
+      subExpenseIds: subExpenseIds,
+    },
+  });
 
   // Trigger categorization for each sub-expense
   const categorizationEvents = subExpenseIds.map(subExpenseId => ({
@@ -173,12 +215,32 @@ async function handleNormalCategorization(
   categoryId: string | undefined,
   newCategory: any
 ): Promise<Response> {
-  // If creating a new category, do that first
+  // If creating a new category, check if it already exists first
   let finalCategoryId = categoryId;
   if (newCategory) {
     const { name, description, parentId } = newCategory;
-    finalCategoryId = `cat_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-    await createCategory({ id: finalCategoryId, name, description, parentId });
+
+    // Check if a category with the same name and parent already exists (case-insensitive)
+    const existingCategory = await findCategoryByNameAndParent(name, parentId);
+
+    if (existingCategory) {
+      // Use the existing category instead of creating a duplicate
+      finalCategoryId = existingCategory.id;
+      logger.info({
+        name,
+        parentId,
+        existingCategoryId: existingCategory.id
+      }, 'Using existing category instead of creating duplicate');
+    } else {
+      // Create the new category
+      finalCategoryId = `cat_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+      await createCategory({ id: finalCategoryId, name, description, parentId });
+      logger.info({
+        name,
+        parentId,
+        newCategoryId: finalCategoryId
+      }, 'Created new category');
+    }
   }
 
   // Ensure we have a category ID
@@ -191,13 +253,30 @@ async function handleNormalCategorization(
     });
   }
 
+  // Get expense to include its data in categorization
+  const expense = await getExpense(item.runId, item.expenseId);
+  if (!expense) {
+    return new Response(safeJsonStringify({
+      error: "Expense not found"
+    }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   // Save categorization
+  const now = new Date().toISOString();
   await saveCategorization({
     expenseId: item.expenseId,
     categoryId: finalCategoryId,
     confidence: 1.0,
     reasoning: "Human review",
-    createdAt: new Date().toISOString(),
+    amount: expense.amount,
+    date: expense.date,
+    description: expense.description,
+    merchant: expense.merchant,
+    createdAt: expense.date,
+    categorizedAt: now,
   });
 
   // Resolve review item
@@ -262,5 +341,52 @@ function parseAmazonItems(amazonItems: any[], amazonChargeSummary: any): Array<{
   }
 
   return items;
+}
+
+export async function handleRetryReview(id: string): Promise<Response> {
+  try {
+    // Verify the review item exists before triggering workflow
+    const item = await getReviewQueueItem(id);
+    if (!item) {
+      return new Response(safeJsonStringify({ error: "Review item not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    logger.info({
+      reviewId: id,
+      expenseId: item.expenseId,
+      runId: item.runId
+    }, 'Triggering retry workflow');
+
+    // Trigger the retry workflow - all logic happens there
+    await inngest.send({
+      name: "review/retry.requested",
+      data: {
+        reviewItemId: id,
+      },
+    });
+
+    return new Response(safeJsonStringify({
+      message: "Retry workflow triggered - the LLM will re-categorize with fresh categories",
+      reviewItemId: id,
+    }), {
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (error) {
+    logger.error({
+      reviewId: id,
+      error: error instanceof Error ? error.message : error,
+      stack: error instanceof Error ? error.stack : undefined
+    }, 'Failed to trigger retry workflow');
+
+    return new Response(safeJsonStringify({
+      error: error instanceof Error ? error.message : "Unknown error"
+    }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 }
 
